@@ -5,7 +5,7 @@
   "type": "module",
   "description": "A web-search chat agent: model decides, harness guarantees.",
   "engines": {
-    "node": ">=20.19"
+    "node": ">=22.12"
   },
   "scripts": {
     "dev": "concurrently -k -n api,web -c cyan,magenta \"npm:dev:api\" \"npm:dev:web\"",

@@ -16,7 +16,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Vitest 5 needs Node >= 22.12, so the test suite runs on the current LTS and the latest.
+        # The AI SDK, better-sqlite3, Vitest and react-router all require Node >= 22, so that is the floor.
         node: [22, 24]
     steps:
       - uses: actions/checkout@v4
@@ -37,8 +37,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # 20 is the oldest runtime we claim to support (engines), checked here without the test runner.
-        node: [20, 22]
+        node: [22, 24]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

@@ -10,7 +10,7 @@ cp .env.example .env      # then add your keys (see below)
 npm run dev               # UI on http://localhost:5173, API on http://localhost:8000
 ```
 
-Needs Node 20.19 or newer to run the app (the test suite needs Node 22.12 or newer).
+Needs Node 22.12 or newer (the AI SDK, better-sqlite3 and the test runner all require it).
 
 ### Keys (`.env`)
 

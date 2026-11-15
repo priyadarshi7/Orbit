@@ -12,9 +12,9 @@
 
 **Router:** a cheap model classifies each question with the previous exchange (about 1 s). On timeout or bad output keyword rules decide. Forced modes skip it.
 
-**Retrieval:** parallel queries, TTL cache, reciprocal-rank fusion, optional page reads (SSRF-guarded, every redirect re-checked), BM25 over stemmed passages under a token budget, stable source ids. Page text is untrusted data.
+**Retrieval:** parallel queries, TTL cache, reciprocal-rank fusion, optional page reads (SSRF-guarded: every redirect re-checked and the address dialled is validated at connect time), BM25 over stemmed passages under a token budget, stable source ids. Page text is untrusted data.
 
-**Memory:** SQLite (FTS5). Dates are SQL keys ("last Tuesday" resolved in the user's timezone), so no embedding fuzz. A profile fact is stored only if its numbers and names appear in what the *user* wrote (a real bug: a chat date was once saved as a birthday), and a fact has a slot, so "my birthday is…" replaces the old birthday instead of sitting beside it. Edit and regenerate rewind the conversation and the memory those turns wrote. "Has it changed?" is a diff against dated claims.
+**Memory:** SQLite (FTS5). Dates are SQL keys ("last Tuesday" resolved in the user's timezone), so no embedding fuzz. A profile fact is stored only if its numbers and names appear in what the *user* wrote (a real bug: a chat date was once saved as a birthday), and a fact has a slot, so "my birthday is…" replaces the old birthday instead of sitting beside it. Slots are not a fixed list: the model names them per user, and each extraction is shown that user's existing slots so it reuses a name instead of inventing a second one, while a new kind of fact simply creates a new slot. Retrieval stays per-user because the store itself filters every row. Edit and regenerate rewind the conversation and the memory those turns wrote. "Has it changed?" is a diff against dated claims.
 
 ## Why this shape
 

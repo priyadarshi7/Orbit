@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { api, ApiError, attachRun, streamChat, type AgentEvent, type ConversationSummary, type Health, type Mode, type SourceInfo, type TurnTrace } from "@/lib/api";
+import { api, ApiError, attachRun, resumeRun, streamChat, type AgentEvent, type ConversationSummary, type Health, type Mode, type SourceInfo, type TurnTrace } from "@/lib/api";
 
 export interface UiMessage {
   id: string;
@@ -11,6 +11,8 @@ export interface UiMessage {
   found?: number;
   startedAt?: number;
   error?: string;
+  /** An interrupted answer that can continue from its last checkpoint (the run to resume). */
+  resumeRunId?: string;
   stopped?: boolean;
   trace?: TurnTrace;
   serverId?: string;
@@ -230,7 +232,14 @@ export function useChat() {
           return;
         }
         if (run.status === "interrupted" || run.status === "failed") {
-          msgs.push({ id: aid, role: "assistant", content: "", sources: [], error: run.error ?? "This answer was interrupted." });
+          msgs.push({
+            id: aid,
+            role: "assistant",
+            content: "",
+            sources: [],
+            error: run.error ?? "This answer was interrupted.",
+            resumeRunId: run.resumable ? run.id : undefined,
+          });
         }
       }
       setMessages(msgs);
@@ -274,6 +283,20 @@ export function useChat() {
       }
     },
     [messages, send, conversationId],
+  );
+
+  /** Continue an interrupted answer from where it stopped (its question is not asked again). */
+  const resume = useCallback(
+    (assistantId: string) => {
+      const i = messages.findIndex((m) => m.id === assistantId);
+      const m = messages[i];
+      const q = messages[i - 1];
+      if (!m?.resumeRunId || q?.role !== "user" || busy) return;
+      const runId = m.resumeRunId;
+      patch(assistantId, (x) => ({ ...x, error: undefined, resumeRunId: undefined, content: "", streaming: true, phase: "Resuming…", startedAt: Date.now() }));
+      void drive(assistantId, q.id, conversationId, q.content, (onEvent, signal, onRun) => resumeRun(runId, tz(), onEvent, signal, onRun));
+    },
+    [messages, busy, patch, drive, conversationId],
   );
 
   /** Replace a user message with new text and ask again from there. */
@@ -333,5 +356,5 @@ export function useChat() {
     return health.models.answer;
   }, [health]);
 
-  return { conversationId, messages, list, busy, health, modelNote, mode, setMode, send, open, newChat, remove, retry, edit, stop };
+  return { conversationId, messages, list, busy, health, modelNote, mode, setMode, send, open, newChat, remove, retry, resume, edit, stop };
 }

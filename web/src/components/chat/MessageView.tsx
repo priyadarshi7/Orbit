@@ -102,13 +102,15 @@ function CodeBlock(props: ComponentProps<"pre">) {
 interface Props {
   m: UiMessage;
   onRetry: () => void;
+  /** Continue an interrupted answer from its last checkpoint. */
+  onResume?: () => void;
   onEdit: (text: string) => void;
   onAsk: (text: string) => void;
   canRegenerate?: boolean;
   canEdit?: boolean;
 }
 
-export function MessageView({ m, onRetry, onEdit, onAsk, canRegenerate, canEdit }: Props) {
+export function MessageView({ m, onRetry, onResume, onEdit, onAsk, canRegenerate, canEdit }: Props) {
   const [debug, setDebug] = useState(false);
   const [copied, setCopied] = useState(false);
   const [editing, setEditing] = useState(false);
@@ -220,10 +222,17 @@ export function MessageView({ m, onRetry, onEdit, onAsk, canRegenerate, canEdit 
 
       {m.error && (
         <div className="mt-2 flex items-center justify-between gap-3.5 rounded-xl border border-bad/30 bg-bad-bg px-3.5 py-[9px] text-sm text-bad">
-          {m.error}
-          <Button variant="ghost" onClick={onRetry}>
-            <Icon.refresh /> Try again
-          </Button>
+          <span>{m.error}</span>
+          <span className="flex shrink-0 items-center gap-1">
+            {m.resumeRunId && onResume && (
+              <Button variant="primary" onClick={onResume}>
+                Resume
+              </Button>
+            )}
+            <Button variant="ghost" onClick={onRetry}>
+              <Icon.refresh /> {m.resumeRunId ? "Start over" : "Try again"}
+            </Button>
+          </span>
         </div>
       )}
       {m.stopped && <div className="text-sm text-muted">Stopped.</div>}

@@ -133,6 +133,7 @@ export function ChatPage() {
                   key={m.id}
                   m={m}
                   onRetry={() => chat.retry(m.id)}
+                  onResume={() => chat.resume(m.id)}
                   onEdit={(text) => chat.edit(m.id, text)}
                   onAsk={submit}
                   canEdit={!busy && m.role === "user" && i === messages.length - 2}

@@ -115,7 +115,13 @@ async function publicJson<T>(url: string): Promise<T> {
 export type { BenchRun, BenchModel, BenchCase } from "../../../src/server/benchmarks";
 import type { BenchRun } from "../../../src/server/benchmarks";
 
-export type RunInfo = { id: string; status: "running" | "done" | "failed" | "stopped" | "interrupted"; error: string | null };
+export type RunInfo = {
+  id: string;
+  status: "running" | "done" | "failed" | "stopped" | "interrupted";
+  error: string | null;
+  /** Cut off, and nothing added after the question: can continue from its last checkpoint. */
+  resumable?: boolean;
+};
 
 export const api = {
   benchmarks: () => publicJson<BenchRun[]>("/api/benchmarks"),
@@ -218,6 +224,22 @@ export function streamChat(
         method: "POST",
         headers: { "content-type": "application/json", ...(last >= 0 ? { "last-event-id": String(last) } : {}) },
         body: JSON.stringify(body),
+        signal,
+      }),
+    onEvent,
+    signal,
+    onRun,
+  );
+}
+
+/** Continue an interrupted answer from its last checkpoint, and follow it. A repeat attaches to the same resumed run. */
+export function resumeRun(runId: string, tz: string, onEvent: (e: AgentEvent) => void, signal: AbortSignal, onRun?: (runId: string) => void): Promise<void> {
+  return follow(
+    (last) =>
+      authFetch(`/api/runs/${runId}/resume`, {
+        method: "POST",
+        headers: { "content-type": "application/json", ...(last >= 0 ? { "last-event-id": String(last) } : {}) },
+        body: JSON.stringify({ tz }),
         signal,
       }),
     onEvent,

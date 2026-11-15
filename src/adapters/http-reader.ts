@@ -1,5 +1,8 @@
 import { Readability } from "@mozilla/readability";
+import { lookup as dnsLookup } from "node:dns";
 import { lookup } from "node:dns/promises";
+import type { LookupFunction } from "node:net";
+import { Agent, fetch as undiciFetch } from "undici";
 import { parseHTML } from "linkedom";
 import type { PageContent, PageReader } from "../ports";
 
@@ -67,6 +70,28 @@ export async function isPublicUrl(raw: string, resolve: Resolver = defaultResolv
   }
 }
 
+/**
+ * The address a connection actually dials is checked here, inside the socket's own DNS lookup, so there is
+ * no gap between "we checked this name" and "we connected to it": a name that resolves to a public address
+ * for our check and a private one for the connection (DNS rebinding) is refused at connect time.
+ */
+export const safeLookup: LookupFunction = (hostname, options, callback) => {
+  dnsLookup(hostname, { ...options, all: true }, (err, addrs) => {
+    if (err) return (callback as (e: Error) => void)(err);
+    const list = addrs as { address: string; family: number }[];
+    if (list.length === 0 || list.some((a) => isPrivateIp(a.address))) {
+      return (callback as (e: Error) => void)(new Error(`blocked: ${hostname} resolves to a non-public address`));
+    }
+    if (options.all) (callback as (e: null, a: unknown) => void)(null, list);
+    else (callback as (e: null, a: string, f: number) => void)(null, list[0]!.address, list[0]!.family);
+  });
+};
+
+const pinnedAgent = new Agent({ connect: { lookup: safeLookup } });
+export type Fetcher = (url: string, init: RequestInit) => Promise<Response>;
+const pinnedFetch: Fetcher = (url, init) =>
+  undiciFetch(url, { ...init, dispatcher: pinnedAgent } as Parameters<typeof undiciFetch>[1]) as unknown as Promise<Response>;
+
 async function readCapped(res: Response): Promise<string> {
   const reader = res.body?.getReader();
   if (!reader) return await res.text();
@@ -119,7 +144,10 @@ export interface ReadResult extends PageContent {
 }
 
 export class HttpPageReader implements PageReader {
-  constructor(private readonly resolve: Resolver = defaultResolve) {}
+  constructor(
+    private readonly resolve: Resolver = defaultResolve,
+    private readonly fetcher: Fetcher = pinnedFetch,
+  ) {}
 
   async read(url: string, signal?: AbortSignal): Promise<ReadResult | null> {
     if (!(await isPublicUrl(url, this.resolve))) return null;
@@ -130,7 +158,7 @@ export class HttpPageReader implements PageReader {
       let current = url;
       let res: Response | null = null;
       for (let hop = 0; hop < 5; hop++) {
-        const r = await fetch(current, {
+        const r = await this.fetcher(current, {
           signal: sig,
           redirect: "manual",
           headers: { "user-agent": UA, accept: "text/html,application/xhtml+xml,text/plain;q=0.8" },

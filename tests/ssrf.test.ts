@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { HttpPageReader, isPrivateIp, isPublicUrl } from "../src/adapters/http-reader";
+import { HttpPageReader, isPrivateIp, isPublicUrl, safeLookup } from "../src/adapters/http-reader";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -46,29 +46,42 @@ describe("HttpPageReader redirects", () => {
 
   it("does not follow a redirect from a public page to an internal address", async () => {
     const calls: string[] = [];
-    vi.stubGlobal("fetch", vi.fn(async (u: string) => {
+    const fetcher = vi.fn(async (u: string) => {
       calls.push(u);
       return u.startsWith("https://public.example.com")
         ? new Response(null, { status: 302, headers: { location: "http://169.254.169.254/latest/meta-data/" } })
         : new Response("SECRET", { status: 200, headers: { "content-type": "text/plain" } });
-    }));
-    const reader = new HttpPageReader(async () => ["93.184.216.34"]);
+    });
+    const reader = new HttpPageReader(async () => ["93.184.216.34"], fetcher);
     expect(await reader.read("https://public.example.com/start")).toBeNull();
     expect(calls).toEqual(["https://public.example.com/start"]); // the internal URL was never requested
   });
 
   it("follows a redirect between public pages and still reads the content", async () => {
-    vi.stubGlobal("fetch", vi.fn(async (u: string) =>
+    const fetcher = async (u: string) =>
       u.endsWith("/old")
         ? new Response(null, { status: 301, headers: { location: "/new" } })
-        : new Response(html, { status: 200, headers: { "content-type": "text/html" } }),
-    ));
-    const out = await new HttpPageReader(async () => ["93.184.216.34"]).read("https://public.example.com/old");
+        : new Response(html, { status: 200, headers: { "content-type": "text/html" } });
+    const out = await new HttpPageReader(async () => ["93.184.216.34"], fetcher).read("https://public.example.com/old");
     expect(out?.text).toContain("useful page text");
   });
 
   it("gives up after too many redirects", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () => new Response(null, { status: 302, headers: { location: "/loop" } })));
-    expect(await new HttpPageReader(async () => ["93.184.216.34"]).read("https://public.example.com/loop")).toBeNull();
+    const fetcher = async () => new Response(null, { status: 302, headers: { location: "/loop" } });
+    expect(await new HttpPageReader(async () => ["93.184.216.34"], fetcher).read("https://public.example.com/loop")).toBeNull();
+  });
+});
+
+
+describe("safeLookup (connect-time pinning)", () => {
+  it("refuses a name that resolves to a private address, even though the earlier check passed", async () => {
+    // localhost resolves to a loopback address: the connection itself must refuse it.
+    await expect(
+      new Promise((resolve, reject) => safeLookup("localhost", {}, (err, addr) => (err ? reject(err) : resolve(addr)))),
+    ).rejects.toThrow(/non-public/);
+  });
+  it("passes a public literal address through", async () => {
+    const addr = await new Promise((resolve, reject) => safeLookup("93.184.216.34", {}, (err, a) => (err ? reject(err) : resolve(a))));
+    expect(addr).toBe("93.184.216.34");
   });
 });

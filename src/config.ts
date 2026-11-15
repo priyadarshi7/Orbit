@@ -19,6 +19,21 @@ export interface Config {
   speculativeSearch: boolean;
   /** Optional USD-per-1M-token prices by model spec (see pricing.ts). */
   prices: PriceTable;
+  auth: {
+    /** When false every request is the single legacy user (local tools, offline use). */
+    required: boolean;
+    /** HMAC key for session tokens; generated and stored in the database when unset. */
+    secret: string | undefined;
+  };
+  rateLimit: {
+    chatPerMin: number;
+    apiPerMin: number;
+    /** Anonymous sessions created per IP per minute. */
+    sessionPerMin: number;
+    maxConcurrentTurns: number;
+    /** Read the client IP from X-Forwarded-For (only behind a proxy you control). */
+    trustProxy: boolean;
+  };
   /** Which search backend is primary; the other (if keyed) is the failover. */
   searchProvider: "tavily" | "exa";
   models: {
@@ -70,6 +85,14 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     tavilyKey: str(env.TAVILY_API_KEY),
     exaKey: str(env.EXA_API_KEY),
     prices: parsePrices(str(env.MODEL_PRICES)),
+    auth: { required: !["0", "false", "off"].includes(str(env.AUTH_REQUIRED)?.toLowerCase() ?? ""), secret: str(env.AUTH_SECRET) },
+    rateLimit: {
+      chatPerMin: int(env.RATE_LIMIT_CHAT_PER_MIN, 12),
+      apiPerMin: int(env.RATE_LIMIT_API_PER_MIN, 240),
+      sessionPerMin: int(env.RATE_LIMIT_SESSION_PER_MIN, 20),
+      maxConcurrentTurns: int(env.MAX_CONCURRENT_TURNS, 2),
+      trustProxy: ["1", "true", "on"].includes(str(env.TRUST_PROXY)?.toLowerCase() ?? ""),
+    },
     answerReasoning: (["low", "medium", "high"] as const).find((x) => x === str(env.ANSWER_REASONING)?.toLowerCase()),
     speculativeSearch: ["1", "true", "on"].includes(str(env.SPECULATIVE_SEARCH)?.toLowerCase() ?? ""),
     searchProvider: str(env.SEARCH_PROVIDER)?.toLowerCase() === "exa" ? "exa" : "tavily",

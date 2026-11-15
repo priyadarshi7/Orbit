@@ -13,12 +13,15 @@ import { LEGACY_USER } from "../memory/store";
 import { bearer, Sessions } from "./auth";
 import { loadBenchmarks } from "./benchmarks";
 import { ConcurrencyGate, TokenBucketLimiter, type RateLimiter } from "./ratelimit";
+import { RunManager, type ActiveRun } from "./runs";
 
 const ChatBody = z.object({
   message: z.string().trim().min(1).max(8000),
   conversationId: z.string().min(8).max(64).optional(),
   tz: z.string().max(64).optional(),
   mode: z.enum(["auto", "fast", "deep"]).optional(),
+  /** Client-chosen id for this send. Repeating it attaches to the same run instead of starting another. */
+  requestId: z.string().min(8).max(64).optional(),
 });
 
 type Env = { Variables: { userId: string } };
@@ -33,6 +36,7 @@ export function buildServer(app: ReturnType<typeof createApp>, opts: ServerOptio
   const limits = cfg.rateLimit;
   const limiter = opts.limiter ?? new TokenBucketLimiter();
   const gate = opts.gate ?? new ConcurrencyGate();
+  const runs = new RunManager(deps, { hardTimeoutMs: cfg.budgets.turnHardTimeoutMs });
   const sessions = Sessions.open(deps.store, cfg.auth.secret);
   const api = new Hono<Env>();
 
@@ -107,7 +111,12 @@ export function buildServer(app: ReturnType<typeof createApp>, opts: ServerOptio
     const s = store(c);
     const conv = s.getConversation(c.req.param("id"));
     if (!conv) return c.json({ error: "not found" }, 404);
-    return c.json({ ...conv, messages: s.getMessages(conv.id) });
+    const run = s.latestRunFor(conv.id);
+    return c.json({
+      ...conv,
+      messages: s.getMessages(conv.id),
+      run: run ? { id: run.id, status: run.status, error: run.error } : null,
+    });
   });
 
   authed.delete("/conversations/:id", (c) => {
@@ -152,11 +161,43 @@ export function buildServer(app: ReturnType<typeof createApp>, opts: ServerOptio
     }
   });
 
+  /** Streams a run's events to this connection: replay after `after`, then live. Closing the connection never stops the run. */
+  const attach = (c: Context<Env>, run: ActiveRun, after: number) => {
+    c.header("X-Run-Id", run.id);
+    return streamSSE(c, async (stream) => {
+      const gone = new AbortController();
+      stream.onAbort(() => gone.abort());
+      try {
+        for await (const { seq, event } of runs.stream(run, after, gone.signal)) {
+          await stream.writeSSE({ id: String(seq), event: event.type, data: JSON.stringify(event) });
+        }
+      } catch {
+        /* the client went away; the run carries on */
+      }
+    });
+  };
+  const resumeAfter = (c: Context<Env>): number => {
+    const n = Number(c.req.header("last-event-id") ?? c.req.query("after") ?? -1);
+    return Number.isFinite(n) ? n : -1;
+  };
+  // The run is over and its events are no longer in memory (for example after a restart): the client reloads from the database.
+  const runGone = (c: Context<Env>, userId: string, requestId?: string, runId?: string) => {
+    const past = requestId ? deps.store.forUser(userId).runByRequest(requestId) : runId ? deps.store.forUser(userId).getRun(runId) : null;
+    return past ? c.json({ error: "run_gone", status: past.status, conversationId: past.conversationId }, 409) : c.json({ error: "not found" }, 404);
+  };
+
   authed.post("/chat", bodyLimit({ maxSize: 64 * 1024, onError: (c) => c.json({ error: "too_large", message: "That message is too large." }, 413) }), async (c) => {
     const parsed = ChatBody.safeParse(await c.req.json().catch(() => null));
     if (!parsed.success) return c.json({ error: "invalid request", issues: parsed.error.issues.slice(0, 3) }, 400);
     const body = parsed.data;
     const userId = c.get("userId");
+
+    // Same request id again (a retry, a reconnect): follow the run that already exists. Costs no allowance.
+    if (body.requestId) {
+      const live = runs.byRequest(userId, body.requestId);
+      if (live) return attach(c, live, resumeAfter(c));
+      if (deps.store.forUser(userId).runByRequest(body.requestId)) return runGone(c, userId, body.requestId);
+    }
 
     // A turn can fan out into many model and search calls, so cap how fast and how many at once.
     const byUser = limiter.take(`chat:${userId}`, limits.chatPerMin);
@@ -169,28 +210,24 @@ export function buildServer(app: ReturnType<typeof createApp>, opts: ServerOptio
       return c.json({ error: "busy", message: "You already have answers in progress. Wait for one to finish or stop it first.", retryAfterSeconds: 5 }, 429);
     }
 
-    const turnDeps = { ...deps, store: deps.store.forUser(userId) };
-    return streamSSE(c, async (stream) => {
-      const ac = new AbortController();
-      stream.onAbort(() => ac.abort());
-      // Backstop only: the agent has its own soft deadline, so this fires for a turn that is genuinely stuck
-      // (a provider that never answers). It frees the user's slot so they are never locked out by a hung turn.
-      const backstop = setTimeout(() => {
-        ac.abort();
-        release();
-      }, cfg.budgets.turnHardTimeoutMs);
-      try {
-        for await (const ev of runTurn(turnDeps, { ...body, signal: ac.signal })) {
-          await stream.writeSSE({ event: ev.type, data: JSON.stringify(ev) });
-        }
-      } catch {
-        ac.abort();
-      } finally {
-        clearTimeout(backstop);
-        release();
-      }
-    });
+    let run: ActiveRun;
+    try {
+      run = runs.start(userId, body, release);
+    } catch {
+      release(); // lost a race on the same request id
+      return runGone(c, userId, body.requestId);
+    }
+    return attach(c, run, -1);
   });
+
+  // Reattach to a run (page reload, dropped connection): replays from `after` / Last-Event-ID, then follows live.
+  authed.get("/runs/:id/events", (c) => {
+    const run = runs.get(c.get("userId"), c.req.param("id"));
+    return run ? attach(c, run, resumeAfter(c)) : runGone(c, c.get("userId"), undefined, c.req.param("id"));
+  });
+
+  // The Stop button: an explicit cancel, since a closed connection no longer stops a run.
+  authed.post("/runs/:id/cancel", (c) => c.json({ ok: runs.cancel(c.get("userId"), c.req.param("id")) }));
 
   api.route("/", authed);
 

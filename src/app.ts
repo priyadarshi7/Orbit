@@ -31,6 +31,9 @@ export interface App {
 /** Composition root: the only place that wires real adapters to ports. */
 export function createApp(cfg: Config = loadConfig()): App {
   const store = new MemoryStore(cfg.dbPath);
+  // Turns that were mid-flight when the last process died cannot finish; say so instead of leaving them 'running'.
+  const interrupted = store.interruptRunningRuns(new Date().toISOString());
+  if (interrupted) console.log(`recovered: marked ${interrupted} interrupted turn(s)`);
 
   const background = resolveModel(cfg.models.background, cfg);
   const outbox = new OutboxWorker(

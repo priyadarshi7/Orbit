@@ -65,6 +65,21 @@ export interface FactRow {
   previous: string | null;
 }
 
+export type RunStatus = "running" | "done" | "failed" | "stopped" | "interrupted";
+
+/** One chat turn's durable record: what it belongs to and how it ended. */
+export interface RunRow {
+  id: string;
+  requestId: string | null;
+  conversationId: string | null;
+  userMessageId: string | null;
+  status: RunStatus;
+  error: string | null;
+  assistantMessageId: string | null;
+  startedAt: string;
+  finishedAt: string | null;
+}
+
 export interface OutboxJob {
   id: number;
   kind: string;
@@ -144,6 +159,21 @@ CREATE TABLE IF NOT EXISTS outbox (
   created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_outbox_pending ON outbox(status, run_after);
+
+CREATE TABLE IF NOT EXISTS runs (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  request_id TEXT,
+  conversation_id TEXT,
+  user_message_id TEXT,
+  status TEXT NOT NULL DEFAULT 'running',
+  error TEXT,
+  assistant_message_id TEXT,
+  started_at TEXT NOT NULL,
+  finished_at TEXT,
+  UNIQUE (user_id, request_id)
+);
+CREATE INDEX IF NOT EXISTS idx_runs_conv ON runs(conversation_id, started_at);
 
 CREATE TABLE IF NOT EXISTS cache (
   key TEXT PRIMARY KEY,
@@ -302,6 +332,7 @@ export class MemoryStore {
     const eps = this.db.prepare("SELECT id FROM episodes WHERE conversation_id = ?").all(id) as { id: number }[];
     const del = this.db.prepare("DELETE FROM episodes_fts WHERE rowid = ?");
     for (const e of eps) del.run(e.id);
+    this.db.prepare("DELETE FROM runs WHERE conversation_id = ? AND user_id = ?").run(id, this.userId);
     this.db.prepare("DELETE FROM conversations WHERE id = ? AND user_id = ?").run(id, this.userId);
   }
 
@@ -631,6 +662,79 @@ export class MemoryStore {
       .prepare("SELECT * FROM claims WHERE user_id = ? ORDER BY id DESC LIMIT ?")
       .all(this.userId, limit) as Parameters<MemoryStore["mapClaim"]>[0][];
     return rows.map((r) => this.mapClaim(r));
+  }
+
+  // ── runs (one durable record per chat turn) ──────────────────────────
+  private mapRun(r: {
+    id: string;
+    request_id: string | null;
+    conversation_id: string | null;
+    user_message_id: string | null;
+    status: RunStatus;
+    error: string | null;
+    assistant_message_id: string | null;
+    started_at: string;
+    finished_at: string | null;
+  }): RunRow {
+    return {
+      id: r.id,
+      requestId: r.request_id,
+      conversationId: r.conversation_id,
+      userMessageId: r.user_message_id,
+      status: r.status,
+      error: r.error,
+      assistantMessageId: r.assistant_message_id,
+      startedAt: r.started_at,
+      finishedAt: r.finished_at,
+    };
+  }
+
+  createRun(r: { id: string; requestId?: string | null; conversationId?: string | null; startedAt: string }): void {
+    this.db
+      .prepare("INSERT INTO runs (id, user_id, request_id, conversation_id, started_at) VALUES (?,?,?,?,?)")
+      .run(r.id, this.userId, r.requestId ?? null, r.conversationId ?? null, r.startedAt);
+  }
+
+  /** Once the turn has saved the question, record which conversation and message it is about. */
+  setRunTarget(id: string, conversationId: string, userMessageId: string): void {
+    this.db
+      .prepare("UPDATE runs SET conversation_id = ?, user_message_id = ? WHERE id = ? AND user_id = ?")
+      .run(conversationId, userMessageId, id, this.userId);
+  }
+
+  finishRun(id: string, status: Exclude<RunStatus, "running">, at: string, extra: { error?: string; assistantMessageId?: string } = {}): void {
+    this.db
+      .prepare("UPDATE runs SET status = ?, finished_at = ?, error = ?, assistant_message_id = ? WHERE id = ? AND user_id = ? AND status = 'running'")
+      .run(status, at, extra.error ?? null, extra.assistantMessageId ?? null, id, this.userId);
+  }
+
+  getRun(id: string): RunRow | null {
+    const r = this.db.prepare("SELECT * FROM runs WHERE id = ? AND user_id = ?").get(id, this.userId) as Parameters<MemoryStore["mapRun"]>[0] | undefined;
+    return r ? this.mapRun(r) : null;
+  }
+
+  runByRequest(requestId: string): RunRow | null {
+    const r = this.db.prepare("SELECT * FROM runs WHERE request_id = ? AND user_id = ?").get(requestId, this.userId) as
+      | Parameters<MemoryStore["mapRun"]>[0]
+      | undefined;
+    return r ? this.mapRun(r) : null;
+  }
+
+  latestRunFor(conversationId: string): RunRow | null {
+    const r = this.db
+      .prepare("SELECT * FROM runs WHERE conversation_id = ? AND user_id = ? ORDER BY started_at DESC, rowid DESC LIMIT 1")
+      .get(conversationId, this.userId) as Parameters<MemoryStore["mapRun"]>[0] | undefined;
+    return r ? this.mapRun(r) : null;
+  }
+
+  /**
+   * Startup reconciliation for every user: a turn still marked running when the process starts was cut
+   * off by a crash or restart, so it can never finish. Single-node assumption (see DESIGN.md).
+   */
+  interruptRunningRuns(at: string): number {
+    return this.db
+      .prepare("UPDATE runs SET status = 'interrupted', finished_at = ?, error = 'The server restarted while this answer was being written.' WHERE status = 'running'")
+      .run(at).changes;
   }
 
   // ── outbox ────────────────────────────────────────────────────────────

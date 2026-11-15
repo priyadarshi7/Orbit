@@ -24,8 +24,8 @@
 <text x="266" y="179" font-size="12.5" fill="#52525b">session · rate limits</text>
 <rect x="480" y="110" width="210" height="84" rx="12" fill="#fffbeb" stroke="#d97706" stroke-width="1.5"/>
 <text x="496" y="139" font-size="15" font-weight="700" fill="#78350f">Run manager</text>
-<text x="496" y="162" font-size="12.5" fill="#52525b">detached turn, replayable</text>
-<text x="496" y="179" font-size="12.5" fill="#52525b">events + durable run record</text>
+<text x="496" y="162" font-size="12.5" fill="#52525b">detached, replayable turn</text>
+<text x="496" y="179" font-size="12.5" fill="#52525b">step checkpoints, run record</text>
 <rect x="730" y="110" width="220" height="84" rx="12" fill="#f4f4f5" stroke="#71717a" stroke-width="1.5"/>
 <circle cx="752" cy="134" r="11" fill="#18181b"/>
 <text x="752" y="138.5" text-anchor="middle" font-size="12" font-weight="700" fill="#fff">1</text>
@@ -141,7 +141,7 @@
 <text x="946" y="779" font-size="12.5" fill="#52525b">episodes (FTS5) · dated claims</text>
 <text x="946" y="796" font-size="12.5" fill="#52525b">facts in model-named slots; a new value</text>
 <text x="946" y="813" font-size="12.5" fill="#52525b">replaces the old (extractor reuses names)</text>
-<text x="946" y="830" font-size="12.5" fill="#52525b">runs: done / failed / stopped / interrupted</text>
+<text x="946" y="830" font-size="12.5" fill="#52525b">runs + step checkpoints (resumable)</text>
 <text x="946" y="847" font-size="12.5" fill="#52525b">outbox: idempotent, retried jobs</text>
 </g>
 </svg>

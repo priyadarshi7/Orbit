@@ -4,17 +4,7 @@
 
 ## How it works
 
-```
-Browser (Vite/React, :5173) ──SSE──> API (Hono, :8000)
-                                        │
-   1 Context (code): date/tz, token-budgeted history, memory block
-   2 Router (cheap LLM, rules as fallback; user can force Fast/Deep)
-        ├─ FAST  one agent loop: model ⇄ web_search (≤4 rounds) → answer
-        └─ DEEP  Planner → N parallel Researchers → Synthesizer → Verifier
-   3 Grounding gate (code): citations resolve, tags stripped, prompt-leak and stale-answer guards
-   4 Memory writer (async outbox): episode, profile facts, dated claims with supersede chain
-        web_search = parallel fan-out · RRF · page read · BM25 passages · cache · Tavily⇄Exa failover
-```
+![Orbit architecture: request lifecycle, fast and deep paths, shared infrastructure](docs/architecture.svg)
 
 **Fast path** (most questions): one model, a bounded search loop, streamed answer. Budgets are code, not prompt: repeated queries are refused, the last step forbids tools, a soft deadline forces an answer, and a tool-free recovery call turns gathered evidence into an answer if a model misbehaves.
 

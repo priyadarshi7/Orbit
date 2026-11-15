@@ -15,13 +15,22 @@ export interface TurnJobPayload {
   sources: { url: string; title: string }[];
   createdAt: string;
   tz: string;
+  /** Owner of the turn; absent in jobs queued before accounts existed (legacy user). */
+  userId?: string;
 }
 
 const Extraction = z.object({
   summary: z.string().describe("One or two sentences: what the user wanted and what was concluded. Third person."),
   keywords: z.array(z.string()).describe("3-10 lowercase topic words: products, companies, subjects."),
   profileFacts: z
-    .array(z.string())
+    .array(
+      z.object({
+        slot: z
+          .string()
+          .describe('What the fact is about, 1-3 lowercase words, e.g. "name", "birthday", "city", "job", "team size", "stack". Reuse the same slot for the same kind of fact.'),
+        fact: z.string().describe("The fact as a short sentence."),
+      }),
+    )
     .describe("Durable facts the USER stated about themselves or their situation (team size, stack, location, goals). Not facts about the world."),
   claims: z
     .array(
@@ -39,7 +48,7 @@ export type Extraction = z.infer<typeof Extraction>;
 
 const SYSTEM = `You extract memory records from one chat turn. Output only what is explicitly in the text.
 - summary: concise, factual, third person ("The user asked about… The answer found…").
-- profileFacts: only things the USER stated about themselves in USER MESSAGE. Never take a fact from the ASSISTANT ANSWER, and never from a question. A question about the chat itself ("when did I tell you…", "what did I say about…") yields none. The date a statement was made is not part of the fact (if they said their birthday is 30 April 2005 on 14 November, the fact is the birthday, not 14 November). Empty if none.
+- profileFacts: only things the USER stated about themselves in USER MESSAGE. Never take a fact from the ASSISTANT ANSWER, and never from a question. A question about the chat itself ("when did I tell you…", "what did I say about…") yields none. The date a statement was made is not part of the fact (if they said their birthday is 30 April 2005 on 14 November, the fact is the birthday, not 14 November). Give each a slot (what it is about); if they restate something in an earlier slot, it is the same slot with the new value. Empty if none.
 - claims: only specific, checkable facts from the ANSWER that may change later (prices, plan limits, versions, release dates, features). Skip opinions and general knowledge. Use the exact values given. Empty if none.
 Never invent values.`;
 
@@ -69,11 +78,12 @@ const MONTHS = /^(jan(uary)?|feb(ruary)?|mar(ch)?|apr(il)?|may|jun(e)?|jul(y)?|a
  * that does not appear in the user's message came from somewhere else (the assistant's answer, the date of
  * the chat), so the fact is dropped. This is deterministic, so it holds even when the extraction prompt is ignored.
  */
-export function groundedFacts(facts: string[], userMessage: string): string[] {
+export function groundedFacts<T extends string | { fact: string }>(facts: T[], userMessage: string): T[] {
   const said = userMessage.toLowerCase();
   const saidNums = new Set(said.match(/\d+/g) ?? []);
   const saidWords = new Set(said.match(/[\p{L}\p{N}]+/gu) ?? []);
-  return facts.filter((f) => {
+  return facts.filter((item) => {
+    const f = typeof item === "string" ? item : item.fact;
     const nums = f.match(/\d+/g) ?? [];
     if (nums.some((n) => !saidNums.has(n))) return false;
     const words = f.match(/[\p{L}][\p{L}'-]*/gu) ?? [];
@@ -86,7 +96,8 @@ export function groundedFacts(facts: string[], userMessage: string): string[] {
 }
 
 /** Persist an extraction. Safe to call twice for the same turn. */
-export function applyExtraction(store: MemoryStore, p: TurnJobPayload, x: Extraction): void {
+export function applyExtraction(root: MemoryStore, p: TurnJobPayload, x: Extraction): void {
+  const store = p.userId ? root.forUser(p.userId) : root;
   const localDate = localYMD(new Date(p.createdAt), p.tz);
   const episodeId = store.addEpisode({
     conversationId: p.conversationId,
@@ -120,7 +131,10 @@ export function applyFallbackEpisode(store: MemoryStore, p: TurnJobPayload): voi
 
 export function makeTurnHandler(store: MemoryStore, model: LanguageModel) {
   return async (p: TurnJobPayload): Promise<void> => {
+    // The turn may have been edited or regenerated away while this job waited.
+    if (!store.hasMessage(p.turnKey)) return;
     const x = await extractTurn(model, p);
+    if (!store.hasMessage(p.turnKey)) return;
     applyExtraction(store, p, x);
   };
 }

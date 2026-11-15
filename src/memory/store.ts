@@ -3,6 +3,9 @@ import { randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 
+/** Rows written before accounts existed belong to this user; with auth off, everyone is this user. */
+export const LEGACY_USER = "local";
+
 export interface MessageRow {
   id: string;
   conversationId: string;
@@ -49,6 +52,19 @@ export interface ClaimInput {
   sourceUrl?: string | null;
 }
 
+/** A profile fact. `slot` names what it is about ("birthday"), so a new value replaces the old one. */
+export interface FactInput {
+  slot?: string;
+  fact: string;
+}
+
+export interface FactRow {
+  id: number;
+  fact: string;
+  /** The value this fact replaced, when the user changed it. */
+  previous: string | null;
+}
+
 export interface OutboxJob {
   id: number;
   kind: string;
@@ -59,6 +75,7 @@ export interface OutboxJob {
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS conversations (
   id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL DEFAULT 'local',
   title TEXT NOT NULL,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
@@ -75,6 +92,7 @@ CREATE INDEX IF NOT EXISTS idx_messages_conv ON messages(conversation_id, create
 
 CREATE TABLE IF NOT EXISTS episodes (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id TEXT NOT NULL DEFAULT 'local',
   conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
   turn_key TEXT NOT NULL UNIQUE,
   local_date TEXT NOT NULL,
@@ -89,12 +107,17 @@ CREATE VIRTUAL TABLE IF NOT EXISTS episodes_fts USING fts5(
 
 CREATE TABLE IF NOT EXISTS profile_facts (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
-  fact TEXT NOT NULL UNIQUE,
-  created_at TEXT NOT NULL
+  user_id TEXT NOT NULL DEFAULT 'local',
+  slot TEXT,
+  fact TEXT NOT NULL,
+  previous_fact TEXT,
+  created_at TEXT NOT NULL,
+  UNIQUE (user_id, fact)
 );
 
 CREATE TABLE IF NOT EXISTS claims (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id TEXT NOT NULL DEFAULT 'local',
   subject TEXT NOT NULL,
   attribute TEXT NOT NULL,
   key TEXT NOT NULL,
@@ -127,7 +150,45 @@ CREATE TABLE IF NOT EXISTS cache (
   value TEXT NOT NULL,
   expires_at INTEGER NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS meta (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);
 `;
+
+/** Brings a database created before per-user scoping up to the current shape. Safe to run every start. */
+function migrate(db: Database.Database): void {
+  const hasCol = (table: string, col: string): boolean =>
+    (db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]).some((c) => c.name === col);
+
+  for (const t of ["conversations", "episodes", "claims"]) {
+    if (!hasCol(t, "user_id")) db.exec(`ALTER TABLE ${t} ADD COLUMN user_id TEXT NOT NULL DEFAULT '${LEGACY_USER}'`);
+  }
+  if (!hasCol("profile_facts", "user_id")) {
+    // UNIQUE(fact) becomes UNIQUE(user_id, fact), which SQLite can only do by rebuilding the table.
+    db.exec(`
+      CREATE TABLE profile_facts_new (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id TEXT NOT NULL DEFAULT '${LEGACY_USER}',
+        slot TEXT,
+        fact TEXT NOT NULL,
+        previous_fact TEXT,
+        created_at TEXT NOT NULL,
+        UNIQUE (user_id, fact)
+      );
+      INSERT INTO profile_facts_new (id, fact, created_at) SELECT id, fact, created_at FROM profile_facts;
+      DROP TABLE profile_facts;
+      ALTER TABLE profile_facts_new RENAME TO profile_facts;
+    `);
+  }
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_conversations_user ON conversations(user_id, updated_at);
+    CREATE INDEX IF NOT EXISTS idx_episodes_user ON episodes(user_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_claims_user ON claims(user_id, id);
+    CREATE INDEX IF NOT EXISTS idx_facts_user ON profile_facts(user_id, slot);
+  `);
+}
 
 const norm = (s: string): string =>
   s.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
@@ -141,53 +202,107 @@ export function toFtsQuery(tokens: string[]): string | null {
   return safe.map((t) => `"${t}"*`).join(" OR ");
 }
 
+/**
+ * All user-owned data (conversations, episodes, profile facts, claims) is scoped to `userId`.
+ * `forUser()` returns a view over the same database handle, so every existing call site keeps its
+ * signature and cannot reach another user's rows. The default view is the legacy single user.
+ */
 export class MemoryStore {
   readonly db: Database.Database;
+  readonly userId: string;
+  private readonly owner: boolean;
 
-  constructor(path: string) {
-    if (path !== ":memory:") mkdirSync(dirname(path), { recursive: true });
-    this.db = new Database(path);
-    this.db.pragma("journal_mode = WAL");
-    this.db.pragma("foreign_keys = ON");
-    this.db.pragma("synchronous = NORMAL");
-    this.db.exec(SCHEMA);
+  constructor(path: string | Database.Database, userId: string = LEGACY_USER) {
+    if (typeof path === "string") {
+      if (path !== ":memory:") mkdirSync(dirname(path), { recursive: true });
+      this.db = new Database(path);
+      this.db.pragma("journal_mode = WAL");
+      this.db.pragma("foreign_keys = ON");
+      this.db.pragma("synchronous = NORMAL");
+      this.db.exec(SCHEMA);
+      migrate(this.db);
+      this.owner = true;
+    } else {
+      this.db = path;
+      this.owner = false;
+    }
+    this.userId = userId;
   }
 
+  forUser(userId: string): MemoryStore {
+    return userId === this.userId ? this : new MemoryStore(this.db, userId);
+  }
+
+  /** Closes the database; a scoped view never does. */
   close(): void {
-    this.db.close();
+    if (this.owner && this.db.open) this.db.close();
+  }
+
+  // ── small key/value settings (auth secret, one-time flags) ─────────────
+  getMeta(key: string): string | null {
+    const r = this.db.prepare("SELECT value FROM meta WHERE key = ?").get(key) as { value: string } | undefined;
+    return r?.value ?? null;
+  }
+
+  setMeta(key: string, value: string): void {
+    this.db.prepare("INSERT OR REPLACE INTO meta (key, value) VALUES (?,?)").run(key, value);
+  }
+
+  /** True when rows exist that were written before accounts, under the legacy user. */
+  hasLegacyData(): boolean {
+    return (
+      this.db.prepare("SELECT 1 FROM conversations WHERE user_id = ? LIMIT 1").get(LEGACY_USER) !== undefined ||
+      this.db.prepare("SELECT 1 FROM profile_facts WHERE user_id = ? LIMIT 1").get(LEGACY_USER) !== undefined
+    );
+  }
+
+  /** Hands everything owned by the legacy user to `userId` (used once, so an existing database is not orphaned). */
+  adoptLegacyData(userId: string): void {
+    const tx = this.db.transaction(() => {
+      for (const t of ["conversations", "episodes", "profile_facts", "claims"]) {
+        this.db.prepare(`UPDATE ${t} SET user_id = ? WHERE user_id = ?`).run(userId, LEGACY_USER);
+      }
+    });
+    tx();
   }
 
   // ── conversations & messages ──────────────────────────────────────────
+  /**
+   * Creates a conversation owned by this user and returns its id. If `id` is already taken
+   * (by anyone), a fresh id is used, so a client can never write into someone else's conversation.
+   */
   createConversation(now: string, id: string = randomUUID(), title = "New chat"): string {
-    this.db
-      .prepare("INSERT OR IGNORE INTO conversations (id, title, created_at, updated_at) VALUES (?,?,?,?)")
-      .run(id, title, now, now);
+    const res = this.db
+      .prepare("INSERT OR IGNORE INTO conversations (id, user_id, title, created_at, updated_at) VALUES (?,?,?,?,?)")
+      .run(id, this.userId, title, now, now);
+    if (res.changes === 0 && !this.getConversation(id)) return this.createConversation(now, randomUUID(), title);
     return id;
   }
 
   getConversation(id: string): ConversationRow | null {
     const r = this.db
-      .prepare("SELECT id, title, created_at, updated_at FROM conversations WHERE id = ?")
-      .get(id) as { id: string; title: string; created_at: string; updated_at: string } | undefined;
+      .prepare("SELECT id, title, created_at, updated_at FROM conversations WHERE id = ? AND user_id = ?")
+      .get(id, this.userId) as { id: string; title: string; created_at: string; updated_at: string } | undefined;
     return r ? { id: r.id, title: r.title, createdAt: r.created_at, updatedAt: r.updated_at } : null;
   }
 
   listConversations(limit = 100): ConversationRow[] {
     const rows = this.db
-      .prepare("SELECT id, title, created_at, updated_at FROM conversations ORDER BY updated_at DESC LIMIT ?")
-      .all(limit) as { id: string; title: string; created_at: string; updated_at: string }[];
+      .prepare("SELECT id, title, created_at, updated_at FROM conversations WHERE user_id = ? ORDER BY updated_at DESC LIMIT ?")
+      .all(this.userId, limit) as { id: string; title: string; created_at: string; updated_at: string }[];
     return rows.map((r) => ({ id: r.id, title: r.title, createdAt: r.created_at, updatedAt: r.updated_at }));
   }
 
   setTitle(id: string, title: string): void {
-    this.db.prepare("UPDATE conversations SET title = ? WHERE id = ?").run(title, id);
+    this.db.prepare("UPDATE conversations SET title = ? WHERE id = ? AND user_id = ?").run(title, id, this.userId);
   }
 
   deleteConversation(id: string): void {
+    if (!this.getConversation(id)) return;
     const eps = this.db.prepare("SELECT id FROM episodes WHERE conversation_id = ?").all(id) as { id: number }[];
     const del = this.db.prepare("DELETE FROM episodes_fts WHERE rowid = ?");
     for (const e of eps) del.run(e.id);
-    this.db.prepare("DELETE FROM conversations WHERE id = ?").run(id);
+    this.db.prepare("DELETE FROM conversations WHERE id = ? AND user_id = ?").run(id, this.userId);
   }
 
   appendMessage(m: {
@@ -209,9 +324,11 @@ export class MemoryStore {
   getMessages(conversationId: string): MessageRow[] {
     const rows = this.db
       .prepare(
-        "SELECT id, conversation_id, role, content, created_at, meta FROM messages WHERE conversation_id = ? ORDER BY created_at, rowid",
+        `SELECT m.id, m.conversation_id, m.role, m.content, m.created_at, m.meta
+         FROM messages m JOIN conversations c ON c.id = m.conversation_id
+         WHERE m.conversation_id = ? AND c.user_id = ? ORDER BY m.created_at, m.rowid`,
       )
-      .all(conversationId) as {
+      .all(conversationId, this.userId) as {
       id: string;
       conversation_id: string;
       role: "user" | "assistant";
@@ -227,6 +344,39 @@ export class MemoryStore {
       createdAt: r.created_at,
       meta: r.meta ? (JSON.parse(r.meta) as Record<string, unknown>) : null,
     }));
+  }
+
+  /** True while the message still exists (a rewound turn's background job checks this before writing memory). */
+  hasMessage(id: string): boolean {
+    return this.db.prepare("SELECT 1 FROM messages WHERE id = ?").get(id) !== undefined;
+  }
+
+  /**
+   * Edit and regenerate: removes `messageId` and everything after it, together with the memory
+   * (episodes and the claims they recorded) that those turns produced, so a discarded attempt
+   * leaves no trace in history or recall. Returns how many messages were removed.
+   */
+  rewindFrom(conversationId: string, messageId: string): number {
+    if (!this.getConversation(conversationId)) return 0;
+    const tx = this.db.transaction(() => {
+      const at = this.db
+        .prepare("SELECT rowid AS r FROM messages WHERE id = ? AND conversation_id = ?")
+        .get(messageId, conversationId) as { r: number } | undefined;
+      if (!at) return 0;
+      const gone = this.db
+        .prepare("SELECT id FROM messages WHERE conversation_id = ? AND rowid >= ?")
+        .all(conversationId, at.r) as { id: string }[];
+      for (const g of gone) {
+        const ep = this.db.prepare("SELECT id FROM episodes WHERE turn_key = ?").get(g.id) as { id: number } | undefined;
+        if (!ep) continue;
+        this.db.prepare("DELETE FROM claims WHERE episode_id = ?").run(ep.id);
+        this.db.prepare("DELETE FROM episodes_fts WHERE rowid = ?").run(ep.id);
+        this.db.prepare("DELETE FROM episodes WHERE id = ?").run(ep.id);
+      }
+      this.db.prepare("DELETE FROM messages WHERE conversation_id = ? AND rowid >= ?").run(conversationId, at.r);
+      return gone.length;
+    });
+    return tx();
   }
 
   // ── episodes ──────────────────────────────────────────────────────────
@@ -247,9 +397,9 @@ export class MemoryStore {
     const tx = this.db.transaction(() => {
       const res = this.db
         .prepare(
-          "INSERT INTO episodes (conversation_id, turn_key, local_date, created_at, summary, keywords) VALUES (?,?,?,?,?,?)",
+          "INSERT INTO episodes (user_id, conversation_id, turn_key, local_date, created_at, summary, keywords) VALUES (?,?,?,?,?,?,?)",
         )
-        .run(e.conversationId, e.turnKey, e.localDate, e.createdAt, e.summary, kw);
+        .run(this.userId, e.conversationId, e.turnKey, e.localDate, e.createdAt, e.summary, kw);
       const id = Number(res.lastInsertRowid);
       this.db.prepare("INSERT INTO episodes_fts (rowid, summary, keywords) VALUES (?,?,?)").run(id, e.summary, kw);
       return id;
@@ -279,8 +429,8 @@ export class MemoryStore {
     if (localDates.length === 0) return [];
     const ph = localDates.map(() => "?").join(",");
     const rows = this.db
-      .prepare(`SELECT * FROM episodes WHERE local_date IN (${ph}) ORDER BY created_at LIMIT ?`)
-      .all(...localDates, limit) as Parameters<MemoryStore["mapEpisode"]>[0][];
+      .prepare(`SELECT * FROM episodes WHERE user_id = ? AND local_date IN (${ph}) ORDER BY created_at LIMIT ?`)
+      .all(this.userId, ...localDates, limit) as Parameters<MemoryStore["mapEpisode"]>[0][];
     return rows.map((r) => this.mapEpisode(r));
   }
 
@@ -289,9 +439,9 @@ export class MemoryStore {
       const rows = this.db
         .prepare(
           `SELECT e.* FROM episodes_fts f JOIN episodes e ON e.id = f.rowid
-           WHERE episodes_fts MATCH ? ORDER BY bm25(episodes_fts, 3.0, 1.5) LIMIT ?`,
+           WHERE episodes_fts MATCH ? AND e.user_id = ? ORDER BY bm25(episodes_fts, 3.0, 1.5) LIMIT ?`,
         )
-        .all(ftsQuery, limit) as Parameters<MemoryStore["mapEpisode"]>[0][];
+        .all(ftsQuery, this.userId, limit) as Parameters<MemoryStore["mapEpisode"]>[0][];
       return rows.map((r) => this.mapEpisode(r));
     } catch {
       return [];
@@ -301,9 +451,9 @@ export class MemoryStore {
   recentEpisodes(limit = 8, excludeConversation?: string): EpisodeRow[] {
     const rows = this.db
       .prepare(
-        `SELECT * FROM episodes WHERE (? IS NULL OR conversation_id != ?) ORDER BY created_at DESC LIMIT ?`,
+        `SELECT * FROM episodes WHERE user_id = ? AND (? IS NULL OR conversation_id != ?) ORDER BY created_at DESC LIMIT ?`,
       )
-      .all(excludeConversation ?? null, excludeConversation ?? null, limit) as Parameters<
+      .all(this.userId, excludeConversation ?? null, excludeConversation ?? null, limit) as Parameters<
       MemoryStore["mapEpisode"]
     >[0][];
     return rows.map((r) => this.mapEpisode(r));
@@ -311,8 +461,8 @@ export class MemoryStore {
 
   episodesForConversation(conversationId: string): EpisodeRow[] {
     const rows = this.db
-      .prepare("SELECT * FROM episodes WHERE conversation_id = ? ORDER BY created_at")
-      .all(conversationId) as Parameters<MemoryStore["mapEpisode"]>[0][];
+      .prepare("SELECT * FROM episodes WHERE user_id = ? AND conversation_id = ? ORDER BY created_at")
+      .all(this.userId, conversationId) as Parameters<MemoryStore["mapEpisode"]>[0][];
     return rows.map((r) => this.mapEpisode(r));
   }
 
@@ -320,43 +470,70 @@ export class MemoryStore {
   nearestEpisodeDates(localDate: string, n = 3): string[] {
     const rows = this.db
       .prepare(
-        `SELECT local_date AS d FROM episodes GROUP BY local_date
+        `SELECT local_date AS d FROM episodes WHERE user_id = ? GROUP BY local_date
          ORDER BY ABS(julianday(local_date) - julianday(?)) LIMIT ?`,
       )
-      .all(localDate, n) as { d: string }[];
+      .all(this.userId, localDate, n) as { d: string }[];
     return rows.map((r) => r.d).sort();
   }
 
   // ── profile ───────────────────────────────────────────────────────────
-  addFacts(facts: string[], now: string): void {
-    const ins = this.db.prepare("INSERT OR IGNORE INTO profile_facts (fact, created_at) VALUES (?,?)");
-    for (const f of facts) {
-      const t = f.trim();
-      if (t.length > 2 && t.length <= 240) ins.run(t, now);
-    }
+  /**
+   * Stores what the user said about themselves. A fact with a `slot` ("birthday", "city") replaces the
+   * earlier fact in that slot instead of sitting beside it, keeping the old text as `previous`.
+   */
+  addFacts(facts: (string | FactInput)[], now: string): void {
+    const find = this.db.prepare("SELECT id, fact FROM profile_facts WHERE user_id = ? AND slot = ? ORDER BY id DESC LIMIT 1");
+    const replace = this.db.prepare("UPDATE profile_facts SET fact = ?, previous_fact = ?, created_at = ? WHERE id = ?");
+    const ins = this.db.prepare("INSERT OR IGNORE INTO profile_facts (user_id, slot, fact, created_at) VALUES (?,?,?,?)");
+    const tx = this.db.transaction(() => {
+      for (const f of facts) {
+        const input: FactInput = typeof f === "string" ? { fact: f } : f;
+        const text = input.fact.trim();
+        if (text.length <= 2 || text.length > 240) continue;
+        const slot = input.slot ? norm(input.slot).slice(0, 40) || null : null;
+        if (slot) {
+          const prior = find.get(this.userId, slot) as { id: number; fact: string } | undefined;
+          if (prior) {
+            if (norm(prior.fact) !== norm(text)) replace.run(text, prior.fact, now, prior.id);
+            continue;
+          }
+        }
+        ins.run(this.userId, slot, text, now);
+      }
+    });
+    tx();
   }
 
-  factRows(limit = 50): { id: number; fact: string }[] {
-    return this.db.prepare("SELECT id, fact FROM profile_facts ORDER BY id DESC LIMIT ?").all(limit) as { id: number; fact: string }[];
+  factRows(limit = 50): FactRow[] {
+    return (
+      this.db
+        .prepare("SELECT id, fact, previous_fact FROM profile_facts WHERE user_id = ? ORDER BY id DESC LIMIT ?")
+        .all(this.userId, limit) as { id: number; fact: string; previous_fact: string | null }[]
+    ).map((r) => ({ id: r.id, fact: r.fact, previous: r.previous_fact }));
   }
 
   deleteFact(id: number): boolean {
-    return this.db.prepare("DELETE FROM profile_facts WHERE id = ?").run(id).changes > 0;
+    return this.db.prepare("DELETE FROM profile_facts WHERE id = ? AND user_id = ?").run(id, this.userId).changes > 0;
   }
 
   getClaim(id: number): ClaimRow | null {
-    const r = this.db.prepare("SELECT * FROM claims WHERE id = ?").get(id) as Parameters<MemoryStore["mapClaim"]>[0] | undefined;
+    const r = this.db.prepare("SELECT * FROM claims WHERE id = ? AND user_id = ?").get(id, this.userId) as
+      | Parameters<MemoryStore["mapClaim"]>[0]
+      | undefined;
     return r ? this.mapClaim(r) : null;
   }
 
   /** Deleting a claim leaves any later claim that superseded it intact (the FK sets supersedes_id to null). */
   deleteClaim(id: number): boolean {
-    return this.db.prepare("DELETE FROM claims WHERE id = ?").run(id).changes > 0;
+    return this.db.prepare("DELETE FROM claims WHERE id = ? AND user_id = ?").run(id, this.userId).changes > 0;
   }
 
   facts(limit = 20): string[] {
     return (
-      this.db.prepare("SELECT fact FROM profile_facts ORDER BY id DESC LIMIT ?").all(limit) as { fact: string }[]
+      this.db
+        .prepare("SELECT fact FROM profile_facts WHERE user_id = ? ORDER BY id DESC LIMIT ?")
+        .all(this.userId, limit) as { fact: string }[]
     )
       .map((r) => r.fact)
       .reverse();
@@ -396,11 +573,11 @@ export class MemoryStore {
    */
   recordClaims(episodeId: number | null, claims: ClaimInput[], asOfDefault: string, now: string): number {
     let inserted = 0;
-    const latest = this.db.prepare("SELECT id, value FROM claims WHERE key = ? ORDER BY id DESC LIMIT 1");
+    const latest = this.db.prepare("SELECT id, value FROM claims WHERE user_id = ? AND key = ? ORDER BY id DESC LIMIT 1");
     const confirm = this.db.prepare("UPDATE claims SET confirmed_at = ? WHERE id = ?");
     const insert = this.db.prepare(
-      `INSERT INTO claims (subject, attribute, key, value, as_of, source_url, episode_id, supersedes_id, created_at)
-       VALUES (?,?,?,?,?,?,?,?,?)`,
+      `INSERT INTO claims (user_id, subject, attribute, key, value, as_of, source_url, episode_id, supersedes_id, created_at)
+       VALUES (?,?,?,?,?,?,?,?,?,?)`,
     );
     const tx = this.db.transaction(() => {
       for (const c of claims) {
@@ -409,12 +586,12 @@ export class MemoryStore {
         const value = c.value.trim();
         if (!subject || !attribute || !value) continue;
         const key = `${norm(subject)}|${norm(attribute)}`;
-        const prior = latest.get(key) as { id: number; value: string } | undefined;
+        const prior = latest.get(this.userId, key) as { id: number; value: string } | undefined;
         if (prior && norm(prior.value) === norm(value)) {
           confirm.run(now, prior.id);
           continue;
         }
-        insert.run(subject, attribute, key, value, c.asOf ?? asOfDefault, c.sourceUrl ?? null, episodeId, prior?.id ?? null, now);
+        insert.run(this.userId, subject, attribute, key, value, c.asOf ?? asOfDefault, c.sourceUrl ?? null, episodeId, prior?.id ?? null, now);
         inserted++;
       }
     });
@@ -426,8 +603,8 @@ export class MemoryStore {
     if (episodeIds.length === 0) return [];
     const ph = episodeIds.map(() => "?").join(",");
     const rows = this.db
-      .prepare(`SELECT * FROM claims WHERE episode_id IN (${ph}) ORDER BY id`)
-      .all(...episodeIds) as Parameters<MemoryStore["mapClaim"]>[0][];
+      .prepare(`SELECT * FROM claims WHERE user_id = ? AND episode_id IN (${ph}) ORDER BY id`)
+      .all(this.userId, ...episodeIds) as Parameters<MemoryStore["mapClaim"]>[0][];
     return rows.map((r) => this.mapClaim(r));
   }
 
@@ -437,15 +614,15 @@ export class MemoryStore {
     if (t.length === 0) return [];
     const where = t.map(() => "key LIKE ?").join(" OR ");
     const rows = this.db
-      .prepare(`SELECT * FROM claims WHERE ${where} ORDER BY id DESC LIMIT ?`)
-      .all(...t.map((x) => `%${x}%`), limit) as Parameters<MemoryStore["mapClaim"]>[0][];
+      .prepare(`SELECT * FROM claims WHERE user_id = ? AND (${where}) ORDER BY id DESC LIMIT ?`)
+      .all(this.userId, ...t.map((x) => `%${x}%`), limit) as Parameters<MemoryStore["mapClaim"]>[0][];
     return rows.map((r) => this.mapClaim(r)).reverse();
   }
 
   recentClaims(limit = 40): ClaimRow[] {
     const rows = this.db
-      .prepare("SELECT * FROM claims ORDER BY id DESC LIMIT ?")
-      .all(limit) as Parameters<MemoryStore["mapClaim"]>[0][];
+      .prepare("SELECT * FROM claims WHERE user_id = ? ORDER BY id DESC LIMIT ?")
+      .all(this.userId, limit) as Parameters<MemoryStore["mapClaim"]>[0][];
     return rows.map((r) => this.mapClaim(r));
   }
 

@@ -142,7 +142,7 @@ describe("writer", () => {
     const x = {
       summary: "User asked about Acme pricing.",
       keywords: ["acme", "pricing"],
-      profileFacts: ["Runs a 5-person startup"],
+      profileFacts: [{ slot: "team size", fact: "Runs a 5-person startup" }],
       claims: [{ subject: "Acme", attribute: "Pro price", value: "$29/mo", sourceUrl: "https://acme.com/pricing" }],
     };
     applyExtraction(s, payload(), x);

@@ -97,11 +97,13 @@ async function execute(
   };
 
   // ── conversation + user message (persisted first, so a crash keeps it) ──
-  const conversationId = req.conversationId ?? store.createConversation(nowIso);
-  if (!store.getConversation(conversationId)) store.createConversation(nowIso, conversationId);
+  // A conversation id the user does not own (or that does not exist) gets a fresh conversation, never a write into someone else's.
+  const conversationId =
+    req.conversationId && store.getConversation(req.conversationId) ? req.conversationId : store.createConversation(nowIso, req.conversationId);
   const priorCount = store.getMessages(conversationId).length;
   const userMsgId = store.appendMessage({ conversationId, role: "user", content: question, createdAt: nowIso });
   if (priorCount === 0) store.setTitle(conversationId, truncate(question.replace(/\s+/g, " "), 60));
+  emit({ type: "start", conversationId, userMessageId: userMsgId });
 
   // ── 1. context assembly (code, no LLM) ──────────────────────────────────
   emit({ type: "status", phase: "memory" });
@@ -294,6 +296,7 @@ async function execute(
       sources: citedSources.map((s) => ({ url: s.url, title: s.title })),
       createdAt: nowIso,
       tz,
+      userId: store.userId,
     };
     deps.outbox?.enqueue(TURN_JOB, assistantId, payload, doneAt);
   }

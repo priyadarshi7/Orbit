@@ -99,8 +99,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     speculativeSearch: ["1", "true", "on"].includes(str(env.SPECULATIVE_SEARCH)?.toLowerCase() ?? ""),
     searchProvider: str(env.SEARCH_PROVIDER)?.toLowerCase() === "exa" ? "exa" : "tavily",
     models: {
-      answer: str(env.ANSWER_MODEL) ?? "groq:openai/gpt-oss-120b",
-      answerFallback: str(env.ANSWER_MODEL_FALLBACK),
+      answer: str(env.ANSWER_MODEL) ?? "google:gemini-3.1-flash-lite",
+      answerFallback: str(env.ANSWER_MODEL_FALLBACK) ?? "groq:openai/gpt-oss-120b",
       background: str(env.BACKGROUND_MODEL) ?? "google:gemini-3.1-flash-lite",
       research: str(env.RESEARCH_MODEL) ?? str(env.BACKGROUND_MODEL) ?? "google:gemini-3.1-flash-lite",
       judge: str(env.JUDGE_MODEL) ?? "google:gemini-2.5-flash",

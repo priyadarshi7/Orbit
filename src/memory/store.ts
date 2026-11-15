@@ -513,6 +513,13 @@ export class MemoryStore {
     ).map((r) => ({ id: r.id, fact: r.fact, previous: r.previous_fact }));
   }
 
+  /** The slots this user already has, newest first, so the extractor can reuse a name instead of inventing a second one. */
+  factSlots(limit = 30): { slot: string; fact: string }[] {
+    return this.db
+      .prepare("SELECT slot, fact FROM profile_facts WHERE user_id = ? AND slot IS NOT NULL ORDER BY id DESC LIMIT ?")
+      .all(this.userId, limit) as { slot: string; fact: string }[];
+  }
+
   deleteFact(id: number): boolean {
     return this.db.prepare("DELETE FROM profile_facts WHERE id = ? AND user_id = ?").run(id, this.userId).changes > 0;
   }

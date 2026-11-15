@@ -48,12 +48,17 @@ export type Extraction = z.infer<typeof Extraction>;
 
 const SYSTEM = `You extract memory records from one chat turn. Output only what is explicitly in the text.
 - summary: concise, factual, third person ("The user asked about… The answer found…").
-- profileFacts: only things the USER stated about themselves in USER MESSAGE. Never take a fact from the ASSISTANT ANSWER, and never from a question. A question about the chat itself ("when did I tell you…", "what did I say about…") yields none. The date a statement was made is not part of the fact (if they said their birthday is 30 April 2005 on 14 November, the fact is the birthday, not 14 November). Give each a slot (what it is about); if they restate something in an earlier slot, it is the same slot with the new value. Empty if none.
+- profileFacts: only things the USER stated about themselves in USER MESSAGE. Never take a fact from the ASSISTANT ANSWER, and never from a question. A question about the chat itself ("when did I tell you…", "what did I say about…") yields none. The date a statement was made is not part of the fact (if they said their birthday is 30 April 2005 on 14 November, the fact is the birthday, not 14 November). Give each a slot (what it is about); when EXISTING FACTS lists a slot for the same kind of fact, reuse that exact slot name (a changed value replaces it); otherwise choose a short, natural slot name of your own. Empty if none.
 - claims: only specific, checkable facts from the ANSWER that may change later (prices, plan limits, versions, release dates, features). Skip opinions and general knowledge. Use the exact values given. Empty if none.
 Never invent values.`;
 
-export async function extractTurn(model: LanguageModel, p: TurnJobPayload): Promise<Extraction> {
+export async function extractTurn(
+  model: LanguageModel,
+  p: TurnJobPayload,
+  existing: { slot: string; fact: string }[] = [],
+): Promise<Extraction> {
   const prompt = [
+    existing.length ? `EXISTING FACTS (slot: fact):\n${existing.map((f) => `- ${f.slot}: ${f.fact}`).join("\n")}` : "",
     `USER MESSAGE:\n${truncate(p.userMessage, 1500)}`,
     `ASSISTANT ANSWER:\n${truncate(p.answer, 5000)}`,
     p.sources.length ? `SOURCES CITED:\n${p.sources.slice(0, 12).map((s) => `- ${s.title} ${s.url}`).join("\n")}` : "",
@@ -133,7 +138,7 @@ export function makeTurnHandler(store: MemoryStore, model: LanguageModel) {
   return async (p: TurnJobPayload): Promise<void> => {
     // The turn may have been edited or regenerated away while this job waited.
     if (!store.hasMessage(p.turnKey)) return;
-    const x = await extractTurn(model, p);
+    const x = await extractTurn(model, p, (p.userId ? store.forUser(p.userId) : store).factSlots());
     if (!store.hasMessage(p.turnKey)) return;
     applyExtraction(store, p, x);
   };

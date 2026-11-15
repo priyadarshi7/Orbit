@@ -282,3 +282,25 @@ describe("HTTP API", () => {
     expect(sess.authRequired).toBe(false);
   });
 });
+
+describe("slot vocabulary stays consistent without a fixed list", () => {
+  it("shows the extractor this user's existing slots, and nobody else's", async () => {
+    const { makeTurnHandler } = await import("../src/memory/writer");
+    const root = new MemoryStore(":memory:");
+    root.forUser("u_a").addFacts([{ slot: "date of birth", fact: "Born 30 April 2005" }], NOW);
+    root.forUser("u_b").addFacts([{ slot: "secret hobby", fact: "Collects stamps" }], NOW);
+    const conv = root.forUser("u_a").createConversation(NOW, "conv-slot-0001");
+    const turnKey = root.forUser("u_a").appendMessage({ conversationId: conv, role: "assistant", content: "ok", createdAt: NOW });
+    const model = scriptedModel([{ text: "" }], {
+      generateText: JSON.stringify({ summary: "s", keywords: [], profileFacts: [{ slot: "date of birth", fact: "Born 1 May 2005" }], claims: [] }),
+    });
+    await makeTurnHandler(root, model)({
+      conversationId: conv, turnKey, userMessage: "Actually I was born 1 May 2005", answer: "Noted.", sources: [], createdAt: NOW, tz: "UTC", userId: "u_a",
+    });
+    const prompt = JSON.stringify(model.doGenerateCalls[0]!.prompt);
+    expect(prompt).toContain("date of birth");
+    expect(prompt).not.toContain("secret hobby");
+    // Reusing the slot name replaced the old value instead of adding a second fact.
+    expect(root.forUser("u_a").facts()).toEqual(["Born 1 May 2005"]);
+  });
+});

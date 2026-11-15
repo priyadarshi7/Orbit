@@ -2,9 +2,10 @@ import { isStepCount, streamText, type LanguageModel, type ModelMessage } from "
 import type { Config } from "../config";
 import { gate, leaksInstructions, WITHHELD_REPLY } from "../grounding/gate";
 import { estimateCost } from "../pricing";
+import type { CheckpointIO, ResumeTarget } from "./checkpoint";
 import { runDeep } from "./deep";
 import { needsFreshSearch } from "./freshness";
-import { routeTurn } from "./router";
+import { routeTurn, type Route } from "./router";
 import { providerOptionsFor } from "./modelOptions";
 import { assembleMemory } from "../memory/assemble";
 import type { OutboxWorker } from "../memory/outbox";
@@ -44,6 +45,10 @@ export interface TurnRequest {
   /** auto = router decides; fast/deep force a path. */
   mode?: Mode;
   signal?: AbortSignal;
+  /** Continue an interrupted turn: its question is already saved, so none is added. */
+  resume?: ResumeTarget;
+  /** Where this turn saves its progress; `resume` on it carries what an interrupted attempt had saved. */
+  checkpoint?: CheckpointIO;
 }
 
 const KEEP_VERBATIM = 10;
@@ -97,13 +102,26 @@ async function execute(
   };
 
   // ── conversation + user message (persisted first, so a crash keeps it) ──
-  // A conversation id the user does not own (or that does not exist) gets a fresh conversation, never a write into someone else's.
-  const conversationId =
-    req.conversationId && store.getConversation(req.conversationId) ? req.conversationId : store.createConversation(nowIso, req.conversationId);
-  const priorCount = store.getMessages(conversationId).length;
-  const userMsgId = store.appendMessage({ conversationId, role: "user", content: question, createdAt: nowIso });
-  if (priorCount === 0) store.setTitle(conversationId, truncate(question.replace(/\s+/g, " "), 60));
-  emit({ type: "start", conversationId, userMessageId: userMsgId });
+  let conversationId: string;
+  let userMsgId: string;
+  if (req.resume) {
+    // Continuing an interrupted turn: the question is already saved, and nothing may be added after it.
+    const last = store.getConversation(req.resume.conversationId) ? store.getMessages(req.resume.conversationId).at(-1) : undefined;
+    if (!last || last.role !== "user" || last.id !== req.resume.userMessageId) {
+      emit({ type: "error", message: "This conversation has moved on, so the interrupted answer can't be resumed." });
+      return;
+    }
+    conversationId = req.resume.conversationId;
+    userMsgId = last.id;
+  } else {
+    // A conversation id the user does not own (or that does not exist) gets a fresh conversation, never a write into someone else's.
+    conversationId =
+      req.conversationId && store.getConversation(req.conversationId) ? req.conversationId : store.createConversation(nowIso, req.conversationId);
+    const priorCount = store.getMessages(conversationId).length;
+    userMsgId = store.appendMessage({ conversationId, role: "user", content: question, createdAt: nowIso });
+    if (priorCount === 0) store.setTitle(conversationId, truncate(question.replace(/\s+/g, " "), 60));
+  }
+  emit({ type: "start", conversationId, userMessageId: userMsgId, ...(req.resume ? { resumed: true } : {}) });
 
   // ── 1. context assembly (code, no LLM) ──────────────────────────────────
   emit({ type: "status", phase: "memory" });
@@ -126,12 +144,20 @@ async function execute(
   emit({ type: "status", phase: "thinking" });
   const registry = new EvidenceRegistry();
   const scale = { value: 1 };
+  // Progress saved by an interrupted earlier attempt: sources keep their numbers, evidence is reusable as it is.
+  const saved = req.checkpoint?.resume;
+  if (saved?.sources?.length) registry.restore(saved.sources);
+  const evidenceLog: string[] = [...(saved?.evidence ?? [])];
+  const onEvidence = (text: string) => {
+    evidenceLog.push(text);
+    req.checkpoint?.save({ sources: registry.snapshot(), evidence: evidenceLog });
+  };
   const state: StreamState = { answer: "", streamed: false, firstTokenMs: undefined, lastMessages: undefined };
 
   // Speculative pre-fetch: for a question that is plainly time-sensitive, the model will search anyway.
   // Doing the first search here puts evidence in its first call and removes one model round trip.
-  if (cfg.speculativeSearch && needsFreshSearch(question)) {
-    const pre = createSearchTool({ cfg, search: deps.search, reader: deps.reader, store, clock, registry, emit, trace, signal: req.signal, rel, scale });
+  if (cfg.speculativeSearch && needsFreshSearch(question) && !saved?.evidence?.length) {
+    const pre = createSearchTool({ cfg, search: deps.search, reader: deps.reader, store, clock, registry, emit, trace, signal: req.signal, rel, scale, onEvidence });
     try {
       const evidence = await (pre.execute as (i: unknown, o: unknown) => Promise<string>)(
         { queries: [question.slice(0, 200)], depth: "snippets", recency: "any" },
@@ -151,11 +177,24 @@ async function execute(
   // ── route: fast (one agent loop) or deep (plan → parallel research → synthesis → verify) ──
   const tRoute = rel();
   const prev = history.slice(-2).map((m) => `${m.role}: ${truncate(String(m.content), 240)}`).join("\n");
-  const route = await routeTurn({ model: (deps.research ?? deps.answer).model, question, context: prev, mode: req.mode, signal: req.signal });
-  if (route.by !== "user") trace.timings.push({ stage: "route", startMs: tRoute, endMs: rel(), detail: `${route.path} (${route.by})` });
+  const route: Route = saved?.route
+    ? { ...saved.route, by: "model" }
+    : await routeTurn({ model: (deps.research ?? deps.answer).model, question, context: prev, mode: req.mode, signal: req.signal });
+  if (route.by !== "user" && !saved?.route) trace.timings.push({ stage: "route", startMs: tRoute, endMs: rel(), detail: `${route.path} (${route.by})` });
   trace.path = route.path;
   trace.routeReason = route.reason;
+  req.checkpoint?.save({ route: { path: route.path, reason: route.reason } });
   emit({ type: "route", path: route.path, reason: route.reason });
+  if (req.resume) trace.warnings.push(`resumed after an interruption${saved?.sources?.length ? `: reused ${saved.sources.length} sources already gathered` : ""}`);
+
+  // Fast path, resumed: hand the model the evidence the interrupted attempt already gathered.
+  if (route.path === "fast" && evidenceLog.length > 0 && saved?.evidence?.length) {
+    const last = messages[messages.length - 1]!;
+    messages[messages.length - 1] = {
+      role: "user",
+      content: `${last.content as string}\n\nSearch results already gathered for this question before an interruption (cite them as usual; search again only if they are not enough):\n${saved.evidence.join("\n\n")}`,
+    };
+  }
 
   let current = deps.answer;
   let outcome: StreamOutcome = {};
@@ -176,6 +215,7 @@ async function execute(
       signal: req.signal,
       rel,
       sink: state,
+      checkpoint: req.checkpoint,
     });
     if (d.ok) deepDone = true;
     else {
@@ -204,6 +244,7 @@ async function execute(
         signal: req.signal,
         rel,
         scale,
+        onEvidence,
       });
       return streamOnce(m, messages, search, cfg, req.signal, rel, emit, trace, state, forceSearch);
     };

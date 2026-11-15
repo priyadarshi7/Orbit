@@ -60,7 +60,7 @@ export interface TurnTrace {
 export type AgentEvent =
   | { type: "status"; phase: Phase; detail?: string; t: number }
   /** The turn is accepted: the conversation it belongs to and the id of the user message that was saved. */
-  | { type: "start"; conversationId: string; userMessageId: string; runId?: string; t: number }
+  | { type: "start"; conversationId: string; userMessageId: string; runId?: string; resumed?: boolean; t: number }
   | { type: "route"; path: Path; reason: string; t: number }
   | { type: "plan"; steps: PlanStep[]; t: number }
   | { type: "step"; id: number; state: "running" | "done" | "failed"; sources?: number; t: number }

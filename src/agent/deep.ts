@@ -1,6 +1,7 @@
 import { generateText, isStepCount, Output, streamText, type ModelMessage } from "ai";
 import { z } from "zod";
 import type { Config } from "../config";
+import type { CheckpointIO } from "./checkpoint";
 import type { Clock, PageReader, SearchProvider } from "../ports";
 import type { MemoryStore } from "../memory/store";
 import type { EvidenceRegistry } from "../retrieval/evidence";
@@ -33,6 +34,8 @@ export interface DeepCtx {
   trace: TurnTrace;
   signal?: AbortSignal;
   rel: () => number;
+  /** Saves progress after each finished step; `resume` holds what an interrupted attempt saved. */
+  checkpoint?: CheckpointIO;
   /** Receives the streamed final text and the first-token time. */
   sink: { answer: string; streamed: boolean; firstTokenMs: number | undefined };
 }
@@ -68,9 +71,13 @@ export async function runDeep(c: DeepCtx): Promise<DeepOutcome> {
   const { cfg, emit, trace, rel } = c;
 
   // ── 1. plan ──────────────────────────────────────────────────────────────
+  const resumed = c.checkpoint?.resume;
   emit({ type: "status", phase: "planning" });
   const t0 = rel();
   let steps: PlanStep[];
+  if (resumed?.plan?.length) {
+    steps = resumed.plan; // the plan was already made; do not ask the planner again
+  } else
   try {
     const { output, usage } = await generateText({
       model: c.research.model,
@@ -87,14 +94,20 @@ export async function runDeep(c: DeepCtx): Promise<DeepOutcome> {
     return { ok: false, reason: "planner failed", error };
   }
   trace.plan = steps;
-  trace.timings.push({ stage: "plan", startMs: t0, endMs: rel(), detail: `${steps.length} sub-questions` });
+  trace.timings.push({ stage: "plan", startMs: t0, endMs: rel(), detail: resumed?.plan?.length ? "reused from checkpoint" : `${steps.length} sub-questions` });
+  c.checkpoint?.save({ plan: steps });
   emit({ type: "plan", steps });
 
   // ── 2. research in parallel, bounded ─────────────────────────────────────
   emit({ type: "status", phase: "researching", detail: `${steps.length} sub-questions` });
   const tR = rel();
-  const notes: string[] = new Array(steps.length).fill("");
-  const queue = steps.map((s, i) => ({ s, i }));
+  const finished: Record<string, string> = { ...(resumed?.notes ?? {}) };
+  const notes: string[] = steps.map((s) => finished[String(s.id)] ?? "");
+  // Steps whose notes were saved are not researched again.
+  const queue = steps.map((s, i) => ({ s, i })).filter(({ i }) => !notes[i]!.trim());
+  steps.forEach((s, i) => {
+    if (notes[i]!.trim()) emit({ type: "step", id: s.id, state: "done" });
+  });
   const worker = async () => {
     for (let job = queue.shift(); job; job = queue.shift()) {
       if (c.signal?.aborted) return;
@@ -102,6 +115,8 @@ export async function runDeep(c: DeepCtx): Promise<DeepOutcome> {
       emit({ type: "step", id: job.s.id, state: "running" });
       try {
         notes[job.i] = await research(c, job.s.question);
+        finished[String(job.s.id)] = notes[job.i]!;
+        c.checkpoint?.save({ notes: finished, sources: c.registry.snapshot() });
         emit({ type: "step", id: job.s.id, state: "done", sources: c.registry.size - before });
       } catch (error) {
         trace.warnings.push(`research step ${job.s.id} failed (${msg(error)})`);

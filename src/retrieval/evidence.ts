@@ -1,3 +1,4 @@
+import type { SourceSnapshot } from "../agent/checkpoint";
 import type { SourceInfo } from "../agent/events";
 import { domainOf } from "../util/text";
 import { normalizeUrl } from "./rank";
@@ -40,6 +41,20 @@ export class EvidenceRegistry {
 
   excerpt(id: number): string {
     return this.excerpts.get(id) ?? "";
+  }
+
+  /** Everything seen so far, with the passages shown, so a turn can be saved and later continued. */
+  snapshot(): SourceSnapshot[] {
+    return this.all().map((s) => ({ ...s, excerpt: this.excerpts.get(s.id) ?? "" }));
+  }
+
+  /** Reloads a snapshot into an empty registry, keeping every source's original number so [n] citations stay valid. */
+  restore(items: SourceSnapshot[]): void {
+    for (const { excerpt, ...source } of [...items].sort((a, b) => a.id - b.id)) {
+      this.byKey.set(normalizeUrl(source.url), source);
+      this.byId.set(source.id, source);
+      if (excerpt) this.excerpts.set(source.id, excerpt);
+    }
   }
 
   get(id: number): SourceInfo | undefined {

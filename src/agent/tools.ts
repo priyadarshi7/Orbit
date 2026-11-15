@@ -21,6 +21,8 @@ export interface ToolContext {
   rel: () => number;
   /** Shrinks evidence budgets when a provider says the request was too large. */
   scale: { value: number };
+  /** Called with each round's evidence text once it exists (the turn saves it as a checkpoint). */
+  onEvidence?: (text: string) => void;
 }
 
 const Input = z.object({
@@ -102,6 +104,7 @@ export function createSearchTool(ctx: ToolContext) {
         detail: `${out.stats.uniqueUrls} urls, ${out.stats.pagesRead}/${out.stats.pagesRequested} pages, ${out.stats.passages} passages`,
       });
       ctx.emit({ type: "status", phase: "thinking" });
+      ctx.onEvidence?.(out.text);
       return out.text;
     },
   });

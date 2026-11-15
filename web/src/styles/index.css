@@ -1,0 +1,298 @@
+@import "tailwindcss";
+
+/* Design tokens. Colours are CSS variables so one set of utilities (bg-surface, text-muted,
+   border-line ...) serves both themes. The theme is switched with data-theme on <html>. */
+:root,
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --canvas: #0a0a0b;
+  --surface: #111113;
+  --surface-2: #18181b;
+  --side: #111113;
+  --hover: rgb(245 245 246 / 0.05);
+  --active: rgb(245 245 246 / 0.09);
+  --fg: #f5f5f6;
+  --fg-2: rgb(245 245 246 / 0.74);
+  --muted: #a1a1aa;
+  --faint: #71717a;
+  --line: rgb(255 255 255 / 0.08);
+  --line-strong: rgb(255 255 255 / 0.16);
+  --accent: #f15a45;
+  --accent-bg: rgb(241 90 69 / 0.12);
+  --ok: #3fb950;
+  --ok-bg: rgb(63 185 80 / 0.12);
+  --warn: #e3a008;
+  --warn-bg: rgb(227 160 8 / 0.12);
+  --bad: #f85149;
+  --bad-bg: rgb(248 81 73 / 0.12);
+  --code: #0e0e10;
+  --primary: #f5f5f6;
+  --primary-fg: #0a0a0b;
+  --card-shadow: none;
+  --pop-shadow: 0 1px 2px rgb(0 0 0 / 0.5), 0 12px 32px -12px rgb(0 0 0 / 0.7);
+  --scrim: rgb(0 0 0 / 0.6);
+}
+:root[data-theme="light"] {
+  color-scheme: light;
+  --canvas: #f4f4f5;
+  --surface: #ffffff;
+  --surface-2: #ebebee;
+  --side: #ececef;
+  --hover: rgb(10 10 10 / 0.05);
+  --active: rgb(10 10 10 / 0.09);
+  --fg: #0a0a0a;
+  --fg-2: rgb(10 10 10 / 0.78);
+  --muted: #52525b;
+  --faint: #71717a;
+  --line: rgb(10 10 10 / 0.16);
+  --line-strong: rgb(10 10 10 / 0.3);
+  --accent: #cd1c18;
+  --accent-bg: rgb(205 28 24 / 0.08);
+  --ok: #1a7f37;
+  --ok-bg: rgb(26 127 55 / 0.11);
+  --warn: #a8480a;
+  --warn-bg: rgb(168 72 10 / 0.1);
+  --bad: #cf222e;
+  --bad-bg: rgb(207 34 46 / 0.09);
+  --code: #ebebee;
+  --primary: #18181b;
+  --primary-fg: #ffffff;
+  --card-shadow: 0 1px 2px rgb(10 10 10 / 0.07);
+  --pop-shadow: 0 1px 2px rgb(10 10 10 / 0.08), 0 10px 28px -10px rgb(10 10 10 / 0.22);
+  --scrim: rgb(10 10 10 / 0.35);
+}
+
+@theme inline {
+  --color-canvas: var(--canvas);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-side: var(--side);
+  --color-hover: var(--hover);
+  --color-active: var(--active);
+  --color-fg: var(--fg);
+  --color-fg-2: var(--fg-2);
+  --color-muted: var(--muted);
+  --color-faint: var(--faint);
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+  --color-accent: var(--accent);
+  --color-accent-bg: var(--accent-bg);
+  --color-ok: var(--ok);
+  --color-ok-bg: var(--ok-bg);
+  --color-warn: var(--warn);
+  --color-warn-bg: var(--warn-bg);
+  --color-bad: var(--bad);
+  --color-bad-bg: var(--bad-bg);
+  --color-code: var(--code);
+  --color-primary: var(--primary);
+  --color-primary-fg: var(--primary-fg);
+  --color-scrim: var(--scrim);
+  --shadow-card: var(--card-shadow);
+  --shadow-pop: var(--pop-shadow);
+  --font-sans: Satoshi, ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-display: "Cabinet Grotesk", Satoshi, ui-sans-serif, system-ui, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, "JetBrains Mono", Menlo, Consolas, monospace;
+}
+
+@theme {
+  --animate-sheen: sheen 1.8s linear infinite;
+  --animate-blink: blink 1s steps(2) infinite;
+  --animate-fade: fade 0.2s ease-out both;
+  @keyframes sheen {
+    to {
+      background-position: -200% 0;
+    }
+  }
+  @keyframes blink {
+    50% {
+      opacity: 0;
+    }
+  }
+  @keyframes fade {
+    from {
+      opacity: 0;
+      transform: translateY(4px);
+    }
+  }
+}
+
+@layer base {
+  html {
+    scroll-behavior: smooth;
+    scroll-padding-top: 76px;
+  }
+  html,
+  body,
+  #root {
+    min-height: 100%;
+    margin: 0;
+  }
+  body {
+    @apply bg-canvas font-sans text-[15px] leading-[1.65] text-fg antialiased;
+    text-rendering: optimizeLegibility;
+  }
+  ::selection {
+    background: var(--accent-bg);
+  }
+  button {
+    cursor: pointer;
+  }
+  button:focus-visible,
+  a:focus-visible,
+  select:focus-visible,
+  [tabindex]:focus-visible {
+    outline: 2px solid var(--fg-2);
+    outline-offset: 2px;
+  }
+  svg {
+    display: block;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    * {
+      animation: none !important;
+      transition: none !important;
+      scroll-behavior: auto !important;
+    }
+  }
+}
+
+/* Rendered markdown (the only place raw element selectors are justified). */
+@layer components {
+  .prose-chat {
+    overflow-wrap: anywhere;
+  }
+  .prose-chat > :first-child {
+    margin-top: 0;
+  }
+  .prose-chat > :last-child {
+    margin-bottom: 0;
+  }
+  .prose-chat :is(p, ul, ol) {
+    margin: 0.75em 0;
+  }
+  .prose-chat :is(ul, ol) {
+    padding-left: 1.4em;
+  }
+  .prose-chat ul {
+    list-style: disc;
+  }
+  .prose-chat ol {
+    list-style: decimal;
+  }
+  .prose-chat li {
+    margin: 0.3em 0;
+  }
+  .prose-chat li::marker {
+    color: var(--faint);
+  }
+  .prose-chat :is(h1, h2, h3) {
+    font-family: var(--font-display);
+    font-weight: 800;
+    letter-spacing: -0.015em;
+    line-height: 1.3;
+    margin: 1.4em 0 0.4em;
+  }
+  .prose-chat h1 {
+    font-size: 1.4em;
+  }
+  .prose-chat h2 {
+    font-size: 1.2em;
+  }
+  .prose-chat h3 {
+    font-size: 1.05em;
+  }
+  .prose-chat a {
+    text-decoration: underline;
+    text-decoration-color: var(--line-strong);
+    text-underline-offset: 3px;
+  }
+  .prose-chat a:hover {
+    text-decoration-color: var(--accent);
+  }
+  .prose-chat code {
+    font: 0.87em var(--font-mono);
+    background: var(--surface-2);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 1px 5px;
+  }
+  .prose-chat pre {
+    background: var(--code);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 14px 16px;
+    overflow-x: auto;
+    line-height: 1.55;
+  }
+  .prose-chat pre code {
+    background: none;
+    border: 0;
+    padding: 0;
+  }
+  /* The wrapper scrolls (so the table keeps real table layout and fills the column); see TableWrap. */
+  .prose-chat .table-wrap {
+    margin: 1em 0;
+    max-width: 100%;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    background: var(--canvas);
+  }
+  .prose-chat table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 14px;
+    line-height: 1.5;
+  }
+  .prose-chat :is(th, td) {
+    padding: 9px 14px;
+    text-align: left;
+    vertical-align: top;
+    border-bottom: 1px solid var(--line);
+    min-width: 7.5rem;
+    overflow-wrap: break-word;
+  }
+  .prose-chat :is(th, td) + :is(th, td) {
+    border-left: 1px solid var(--line);
+  }
+  .prose-chat tbody tr:last-child td {
+    border-bottom: 0;
+  }
+  .prose-chat tbody tr:hover td {
+    background: var(--hover);
+  }
+  .prose-chat thead th {
+    background: var(--surface);
+    color: var(--muted);
+    font-weight: 500;
+    font-size: 12.5px;
+    white-space: nowrap;
+  }
+  /* First column labels the row: keep it readable instead of squeezed. */
+  .prose-chat tbody td:first-child {
+    font-weight: 500;
+    min-width: 8.5rem;
+  }
+  .prose-chat td :is(p, ul, ol) {
+    margin: 0;
+  }
+  @media (max-width: 640px) {
+    .prose-chat :is(th, td) {
+      padding: 8px 10px;
+      font-size: 13px;
+      min-width: 6.5rem;
+    }
+  }
+  .prose-chat blockquote {
+    margin: 0.9em 0;
+    padding-left: 14px;
+    border-left: 2px solid var(--line-strong);
+    color: var(--muted);
+  }
+  .prose-chat hr {
+    border: 0;
+    border-top: 1px solid var(--line);
+    margin: 1.4em 0;
+  }
+}

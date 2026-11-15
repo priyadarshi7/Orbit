@@ -14,14 +14,15 @@
 
 **Retrieval:** parallel queries, TTL cache, reciprocal-rank fusion, optional page reads (SSRF-guarded, every redirect re-checked), BM25 over stemmed passages under a token budget, stable source ids. Page text is untrusted data.
 
-**Memory:** SQLite (FTS5). Dates are SQL keys ("last Tuesday" resolved in the user's timezone), so no embedding fuzz. A profile fact is stored only if its numbers and names appear in what the *user* wrote (a real bug: a chat date was once saved as a birthday). "Has it changed?" is a diff against dated claims.
+**Memory:** SQLite (FTS5). Dates are SQL keys ("last Tuesday" resolved in the user's timezone), so no embedding fuzz. A profile fact is stored only if its numbers and names appear in what the *user* wrote (a real bug: a chat date was once saved as a birthday), and a fact has a slot, so "my birthday is…" replaces the old birthday instead of sitting beside it. Edit and regenerate rewind the conversation and the memory those turns wrote. "Has it changed?" is a diff against dated claims.
 
 ## Why this shape
 
 - **Speed:** first token waits on one model call plus at most one search round on the fast path. Memory writes run after the response. Prompt prefix is byte-stable for provider caching.
 - **Correctness:** most of it comes from retrieval, then grounding; the verifier checks that a citation *supports* the claim, not just that it exists.
 - **Scale:** every external dependency (search, models, page reader, store) sits behind a port, so Postgres, Redis or a hosted provider are adapter swaps. Per-provider budgets and bounded fan-out stop our own parallelism from tripping rate limits.
-- **Honest limits:** memory and chats are global (no auth or per-user scoping), and there is no rate limiting yet.
+- **Accounts and limits:** each browser gets a signed anonymous session; memory, chats and facts are scoped per user in the store itself, so a route cannot forget to filter. Token-bucket rate limits (per user and per IP), a cap on concurrent answers and request-size limits sit in front of the model calls. Both limiter and sessions are interfaces: Redis and a real identity provider are swaps.
+- **Honest limits:** sessions are anonymous (no sign-up, no password), the limiter is in-process (not shared across instances), and SQLite is a single-node store.
 
 ## Measured so far (`npm run eval`, LLM judge, live search)
 
@@ -30,7 +31,7 @@
 | First live run, 26 cases / 10 skills | 20 / 26 |
 | After fixing the causes (citation formats, stale answers, injection, date handling) | 26 / 26 (one judge error on a date was overruled by hand) |
 | Re-run of 19 cases, judge average | 4.32 / 5 |
-| Unit and integration tests (scripted models, no keys) | 175 passing, run in CI |
+| Unit and integration tests (scripted models, no keys) | 197 passing, run in CI |
 
 Latency is poor on Groq's free tier (median about 19 s, p90 about 89 s, mostly rate-limit waits). **Not yet measured:** the 13 newer eval cases, the deep path, router accuracy, verifier false-positive rate (one early run flagged every source), and the model comparison that chooses the default. Reported here rather than claimed. Results are browsable at `/benchmark`.
 
@@ -49,8 +50,8 @@ Latency is poor on Groq's free tier (median about 19 s, p90 about 89 s, mostly r
 ## With another week
 
 1. Run and publish the numbers above: deep-path cases, a labelled routing set, verifier precision, then choose the default answer model by benchmark.
-2. Auth and per-user memory; Postgres and Redis behind the existing interfaces; request rate limits and a token-bucket model gateway.
-3. Verifier on the fast path; supersede logic for changed profile facts; a cross-encoder reranker.
+2. Real sign-in; Postgres and Redis behind the existing interfaces (shared rate limits, shared cache); a per-provider token-bucket model gateway.
+3. Verifier on the fast path; a cross-encoder reranker.
 4. OpenTelemetry traces from the stage timings already recorded; an eval regression gate in CI.
 
 Stack: TypeScript on Node, Hono + SSE, React + Vite + Tailwind, `better-sqlite3`, Vercel AI SDK, Tavily and Exa. Keys: `.env.example`. Decisions: `docs/DECISIONS.md`.

@@ -66,3 +66,16 @@ src/
 web/           React UI
 tests/         vitest
 ```
+
+## Using the API directly
+
+Each browser gets an anonymous signed session, and memory and chats are private to it. With curl:
+
+```bash
+TOKEN=$(curl -s -X POST localhost:8000/api/session | python -c "import sys,json;print(json.load(sys.stdin)['token'])")
+curl -N -X POST localhost:8000/api/chat \
+  -H "authorization: Bearer $TOKEN" -H "content-type: application/json" \
+  -d '{"message":"What is the latest version of Node.js?","mode":"fast"}'
+```
+
+Chat is limited to 12 messages a minute per session and 2 answers at once (HTTP 429 with `Retry-After`); see `.env.example`. For single-user local tools set `AUTH_REQUIRED=0` and no token is needed.

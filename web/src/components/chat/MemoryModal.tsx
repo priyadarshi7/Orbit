@@ -66,7 +66,10 @@ export function MemoryModal({ onClose }: { onClose: () => void }) {
               <ul className="m-0 grid list-none gap-1 p-0 text-sm">
                 {m.profile.map((f) => (
                   <li key={f.id} className="flex items-center justify-between gap-3 rounded-lg px-2 py-1 hover:bg-hover">
-                    <span>{f.fact}</span>
+                    <span>
+                      {f.fact}
+                      {f.previous ? <span className="ml-2 text-xs text-faint">was: {f.previous}</span> : null}
+                    </span>
                     <Forget label={f.fact} onClick={() => forgetFact(f.id)} />
                   </li>
                 ))}

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ComponentProps, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ComponentProps, type MouseEvent, type ReactNode } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { UiMessage } from "@/hooks/useChat";
@@ -34,9 +34,26 @@ function Elapsed({ since }: { since: number }) {
 
 /** A citation chip that opens a small card (title, domain, date) on hover or keyboard focus. */
 function Cite({ s, children }: { s: SourceInfo; children: ReactNode }) {
+  // Touch screens have no hover: the first tap opens the card, a second tap follows the link.
+  const [open, setOpen] = useState(false);
+  useEffect(() => {
+    if (!open) return;
+    const close = (e: PointerEvent) => {
+      if (!(e.target as Element | null)?.closest?.("[data-cite]")) setOpen(false);
+    };
+    document.addEventListener("pointerdown", close);
+    return () => document.removeEventListener("pointerdown", close);
+  }, [open]);
+  const onClick = (e: MouseEvent<HTMLAnchorElement>) => {
+    if (!open && window.matchMedia?.("(hover: none)").matches) {
+      e.preventDefault();
+      setOpen(true);
+    }
+  };
   return (
-    <span className="group/cite relative inline-block">
+    <span className="group/cite relative inline-block" data-cite>
       <a
+        onClick={onClick}
         href={s.url}
         target="_blank"
         rel="noreferrer noopener"
@@ -46,7 +63,8 @@ function Cite({ s, children }: { s: SourceInfo; children: ReactNode }) {
       </a>
       <span
         role="tooltip"
-        className="pointer-events-none invisible absolute bottom-full left-0 z-20 mb-2 w-64 rounded-lg border border-line-strong bg-surface p-3 text-left text-[13px] leading-snug opacity-0 shadow-pop transition-opacity group-focus-within/cite:visible group-focus-within/cite:opacity-100 group-hover/cite:visible group-hover/cite:opacity-100"
+        data-open={open || undefined}
+        className="pointer-events-none invisible absolute bottom-full left-0 z-20 mb-2 w-64 data-[open]:visible data-[open]:opacity-100 rounded-lg border border-line-strong bg-surface p-3 text-left text-[13px] leading-snug opacity-0 shadow-pop transition-opacity group-focus-within/cite:visible group-focus-within/cite:opacity-100 group-hover/cite:visible group-hover/cite:opacity-100"
       >
         <span className="block font-medium text-fg">{s.title || s.domain}</span>
         <span className="mt-1 block font-mono text-[11.5px] text-faint">

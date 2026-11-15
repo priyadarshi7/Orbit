@@ -96,9 +96,10 @@ export function useChat() {
       const question = text.trim();
       if (!question || busy) return;
       const aid = uid();
+      const userUid = uid();
       setMessages((ms) => [
         ...ms,
-        { id: uid(), role: "user", content: question, sources: [] },
+        { id: userUid, role: "user", content: question, sources: [] },
         { id: aid, role: "assistant", content: "", sources: [], streaming: true, phase: "Starting…", startedAt: Date.now() },
       ]);
       setBusy(true);
@@ -110,6 +111,11 @@ export function useChat() {
         switch (e.type) {
           case "status":
             patch(aid, (m) => ({ ...m, phase: phaseLabel(e.phase, e.detail) }));
+            break;
+          case "start":
+            // The server saved the question: remember its id (for edit/regenerate) and the conversation it landed in.
+            patch(userUid, (m) => ({ ...m, serverId: e.userMessageId }));
+            if (e.conversationId !== convId) setConversationId(e.conversationId);
             break;
           case "route":
             patch(aid, (m) => ({ ...m, route: { path: e.path, reason: e.reason } }));
@@ -173,6 +179,7 @@ export function useChat() {
         id: m.id,
         role: m.role,
         content: m.content,
+        serverId: m.id,
         sources: m.meta?.sources ?? [],
         trace: m.meta?.trace,
         route: m.meta?.trace?.path ? { path: m.meta.trace.path, reason: m.meta.trace.routeReason ?? "" } : undefined,
@@ -203,11 +210,15 @@ export function useChat() {
       const i = messages.findIndex((m) => m.id === assistantId);
       const q = messages[i - 1];
       if (q?.role === "user") {
-        setMessages((ms) => ms.filter((m) => m.id !== assistantId && m.id !== q.id));
-        void send(q.content);
+        void (async () => {
+          // Drop the old attempt on the server too, so history and memory do not keep it.
+          if (q.serverId) await api.rewind(conversationId, q.serverId).catch(() => undefined);
+          setMessages((ms) => ms.filter((m) => m.id !== assistantId && m.id !== q.id));
+          void send(q.content);
+        })();
       }
     },
-    [messages, send],
+    [messages, send, conversationId],
   );
 
   /** Replace a user message with new text and ask again from there. */
@@ -215,10 +226,14 @@ export function useChat() {
     (userMessageId: string, text: string) => {
       const i = messages.findIndex((m) => m.id === userMessageId);
       if (i < 0 || !text.trim()) return;
-      setMessages((ms) => ms.slice(0, i));
-      void send(text);
+      const target = messages[i]!;
+      void (async () => {
+        if (target.serverId) await api.rewind(conversationId, target.serverId).catch(() => undefined);
+        setMessages((ms) => ms.slice(0, i));
+        void send(text);
+      })();
     },
-    [messages, send],
+    [messages, send, conversationId],
   );
 
   const stop = useCallback(() => abortRef.current?.abort(), []);

@@ -1,0 +1,773 @@
+{
+ "model": "groq:openai/gpt-oss-120b",
+ "mode": "record",
+ "status": "complete",
+ "total": 7,
+ "summary": {
+  "model": "groq:openai/gpt-oss-120b",
+  "cases": 7,
+  "passed": 7,
+  "judgeAvg": 5,
+  "ttftP50": 28567,
+  "totalP50": 28751,
+  "totalP90": 97489,
+  "tokensIn": 50757,
+  "tokensOut": 5273,
+  "cachedIn": 7680,
+  "byCategory": {
+   "fresh_fact": {
+    "passed": 2,
+    "total": 2
+   },
+   "multi_hop": {
+    "passed": 2,
+    "total": 2
+   },
+   "comparison": {
+    "passed": 2,
+    "total": 2
+   },
+   "no_record": {
+    "passed": 1,
+    "total": 1
+   }
+  }
+ },
+ "results": [
+  {
+   "id": "ff-node",
+   "category": "fresh_fact",
+   "model": "groq:openai/gpt-oss-120b",
+   "message": "What is the latest stable version of Node.js?",
+   "answer": "The newest **Current** (latest stable) release of Node.js is **v26.13.1**, published on 11 November 2026 [4]. \n\nThe newest **Active LTS** release is **v24.22.3**, also published on 11 November 2026 [4] (Node.js 24 is the current LTS line [1]).",
+   "checks": [
+    {
+     "name": "answered",
+     "ok": true
+    },
+    {
+     "name": "searched",
+     "ok": true,
+     "detail": "searches=1"
+    },
+    {
+     "name": ">=1 citation(s)",
+     "ok": true,
+     "detail": "cited=2"
+    }
+   ],
+   "pass": true,
+   "trace": {
+    "model": "groq:openai/gpt-oss-120b",
+    "totalMs": 28751,
+    "timings": [
+     {
+      "stage": "context",
+      "startMs": 8,
+      "endMs": 9,
+      "detail": "0 episodes, 0 claims"
+     },
+     {
+      "stage": "retrieval",
+      "startMs": 1045,
+      "endMs": 4253,
+      "detail": "14 urls, 4/4 pages, 8 passages"
+     },
+     {
+      "stage": "model(tool)",
+      "startMs": 662,
+      "endMs": 4264,
+      "detail": "1030 in / 158 out"
+     },
+     {
+      "stage": "model(answer)",
+      "startMs": 27722,
+      "endMs": 28747,
+      "detail": "3310 in / 403 out"
+     }
+    ],
+    "usage": {
+     "inputTokens": 4340,
+     "outputTokens": 561,
+     "cachedInputTokens": 0,
+     "steps": 2
+    },
+    "searches": [
+     {
+      "queries": [
+       "Node.js latest stable version November 2026",
+       "current stable Node.js version 2026",
+       "Node.js release schedule latest LTS version 2026"
+      ],
+      "depth": "read",
+      "hits": 18,
+      "cached": false
+     }
+    ],
+    "citations": {
+     "cited": [
+      1,
+      4
+     ],
+     "dropped": []
+    },
+    "warnings": [],
+    "memory": {
+     "episodes": 0,
+     "claims": 0,
+     "hadRecord": null
+    },
+    "usedFallbackModel": false,
+    "firstTokenMs": 28567
+   },
+   "judged": {
+    "score": 5,
+    "correct": true,
+    "grounded": true,
+    "notes": "The assistant correctly identified the latest stable version and LTS release, provided specific dates, and included citations as required by the rubric."
+   }
+  },
+  {
+   "id": "ff-btc",
+   "category": "fresh_fact",
+   "model": "groq:openai/gpt-oss-120b",
+   "message": "What's the current price of Bitcoin in USD?",
+   "answer": "Bitcoin is trading around **$69 000 USD** as of 14 Nov 2026. Recent market data list the price at **$68 999 USD** [6] and note that the coin slipped below **$67 000** during the day [1]. The day-before price was reported at **$69 134 USD** [2]. \n\nSo the current market level is roughly $69 k, with short-term fluctuations keeping it in the $67 k–$70 k range.",
+   "checks": [
+    {
+     "name": "answered",
+     "ok": true
+    },
+    {
+     "name": "searched",
+     "ok": true,
+     "detail": "searches=1"
+    },
+    {
+     "name": "matches /\\$|USD/",
+     "ok": true
+    },
+    {
+     "name": ">=1 citation(s)",
+     "ok": true,
+     "detail": "cited=3"
+    }
+   ],
+   "pass": true,
+   "trace": {
+    "model": "groq:openai/gpt-oss-120b",
+    "totalMs": 25918,
+    "timings": [
+     {
+      "stage": "context",
+      "startMs": 1,
+      "endMs": 2,
+      "detail": "0 episodes, 0 claims"
+     },
+     {
+      "stage": "retrieval",
+      "startMs": 979,
+      "endMs": 2398,
+      "detail": "16 urls, 0/0 pages, 6 passages"
+     },
+     {
+      "stage": "model(tool)",
+      "startMs": 627,
+      "endMs": 2399,
+      "detail": "1029 in / 152 out"
+     },
+     {
+      "stage": "model(answer)",
+      "startMs": 24807,
+      "endMs": 25917,
+      "detail": "3265 in / 458 out"
+     }
+    ],
+    "usage": {
+     "inputTokens": 4294,
+     "outputTokens": 610,
+     "cachedInputTokens": 0,
+     "steps": 2
+    },
+    "searches": [
+     {
+      "queries": [
+       "Bitcoin price USD November 14 2026",
+       "BTC price today November 14 2026",
+       "current Bitcoin price USD"
+      ],
+      "depth": "snippets",
+      "hits": 18,
+      "cached": false
+     }
+    ],
+    "citations": {
+     "cited": [
+      1,
+      2,
+      6
+     ],
+     "dropped": []
+    },
+    "warnings": [],
+    "memory": {
+     "episodes": 0,
+     "claims": 0,
+     "hadRecord": null
+    },
+    "usedFallbackModel": false,
+    "firstTokenMs": 25681
+   },
+   "judged": {
+    "score": 5,
+    "correct": true,
+    "grounded": true,
+    "notes": "The assistant provided a current price, cited sources, and included the necessary disclaimer regarding market volatility."
+   }
+  },
+  {
+   "id": "mh-amd",
+   "category": "multi_hop",
+   "model": "groq:openai/gpt-oss-120b",
+   "message": "Who is the CEO of the company that designs the main chip in the PlayStation 5, and since what year?",
+   "answer": "The main processor in the PlayStation 5 is a custom APU that was designed by **Advanced Micro Devices (AMD)**[8]. \n\nThe chief executive officer of AMD is **Dr. Lisa Su**. She was appointed president and CEO of AMD in **October 2014** and has held the position ever since[1].",
+   "checks": [
+    {
+     "name": "answered",
+     "ok": true
+    },
+    {
+     "name": "searched",
+     "ok": true,
+     "detail": "searches=2"
+    },
+    {
+     "name": "matches /Lisa Su/",
+     "ok": true
+    },
+    {
+     "name": "matches /2014/",
+     "ok": true
+    }
+   ],
+   "pass": true,
+   "trace": {
+    "model": "groq:openai/gpt-oss-120b",
+    "totalMs": 65485,
+    "timings": [
+     {
+      "stage": "context",
+      "startMs": 0,
+      "endMs": 35,
+      "detail": "0 episodes, 0 claims"
+     },
+     {
+      "stage": "retrieval",
+      "startMs": 714,
+      "endMs": 2706,
+      "detail": "8 urls, 0/0 pages, 7 passages"
+     },
+     {
+      "stage": "model(tool)",
+      "startMs": 301,
+      "endMs": 2706,
+      "detail": "1044 in / 190 out"
+     },
+     {
+      "stage": "retrieval",
+      "startMs": 3358,
+      "endMs": 4681,
+      "detail": "13 urls, 0/0 pages, 5 passages"
+     },
+     {
+      "stage": "model(tool)",
+      "startMs": 2912,
+      "endMs": 4682,
+      "detail": "2968 in / 150 out"
+     },
+     {
+      "stage": "model(tool)",
+      "startMs": 28194,
+      "endMs": 28583,
+      "detail": "4778 in / 68 out"
+     },
+     {
+      "stage": "model(answer)",
+      "startMs": 65090,
+      "endMs": 65483,
+      "detail": "4893 in / 80 out"
+     }
+    ],
+    "usage": {
+     "inputTokens": 13683,
+     "outputTokens": 488,
+     "cachedInputTokens": 768,
+     "steps": 4
+    },
+    "searches": [
+     {
+      "queries": [
+       "AMD CEO Lisa Su year became CEO",
+       "AMD chief executive officer since year",
+       "Lisa Su became CEO of AMD 2014"
+      ],
+      "depth": "snippets",
+      "hits": 18,
+      "cached": false
+     },
+     {
+      "queries": [
+       "PlayStation 5 main chip designed by AMD",
+       "PS5 custom AMD chip",
+       "PlayStation 5 AMD custom processor"
+      ],
+      "depth": "snippets",
+      "hits": 18,
+      "cached": false
+     }
+    ],
+    "citations": {
+     "cited": [
+      1,
+      8
+     ],
+     "dropped": []
+    },
+    "warnings": [],
+    "memory": {
+     "episodes": 0,
+     "claims": 0,
+     "hadRecord": null
+    },
+    "usedFallbackModel": false,
+    "firstTokenMs": 65321
+   },
+   "judged": {
+    "score": 5,
+    "correct": true,
+    "grounded": true,
+    "notes": "The assistant correctly identified AMD, Lisa Su, and the year 2014, providing clear citations for the information."
+   }
+  },
+  {
+   "id": "mh-olympics",
+   "category": "multi_hop",
+   "model": "groq:openai/gpt-oss-120b",
+   "message": "Which country hosted the 2024 Summer Olympics, and what is the population of its capital city?",
+   "answer": "The 2024 Summer Olympics were hosted by **France**. \nIts capital, **Paris**, had an estimated city-proper population of **2,047,602** as of January 2026[1].",
+   "checks": [
+    {
+     "name": "answered",
+     "ok": true
+    },
+    {
+     "name": "searched",
+     "ok": true,
+     "detail": "searches=1"
+    },
+    {
+     "name": "matches /France/",
+     "ok": true
+    },
+    {
+     "name": "matches /Paris/",
+     "ok": true
+    },
+    {
+     "name": ">=1 citation(s)",
+     "ok": true,
+     "detail": "cited=1"
+    }
+   ],
+   "pass": true,
+   "trace": {
+    "model": "groq:openai/gpt-oss-120b",
+    "totalMs": 22247,
+    "timings": [
+     {
+      "stage": "context",
+      "startMs": 1,
+      "endMs": 1,
+      "detail": "0 episodes, 0 claims"
+     },
+     {
+      "stage": "retrieval",
+      "startMs": 639,
+      "endMs": 2294,
+      "detail": "11 urls, 0/0 pages, 6 passages"
+     },
+     {
+      "stage": "model(tool)",
+      "startMs": 322,
+      "endMs": 2295,
+      "detail": "1040 in / 139 out"
+     },
+     {
+      "stage": "model(answer)",
+      "startMs": 21754,
+      "endMs": 22246,
+      "detail": "3649 in / 168 out"
+     }
+    ],
+    "usage": {
+     "inputTokens": 4689,
+     "outputTokens": 307,
+     "cachedInputTokens": 768,
+     "steps": 2
+    },
+    "searches": [
+     {
+      "queries": [
+       "Paris population 2024",
+       "population of Paris 2023",
+       "Paris city population latest estimate"
+      ],
+      "depth": "snippets",
+      "hits": 18,
+      "cached": false
+     }
+    ],
+    "citations": {
+     "cited": [
+      1
+     ],
+     "dropped": []
+    },
+    "warnings": [],
+    "memory": {
+     "episodes": 0,
+     "claims": 0,
+     "hadRecord": null
+    },
+    "usedFallbackModel": false,
+    "firstTokenMs": 22151
+   },
+   "judged": {
+    "score": 5,
+    "correct": true,
+    "grounded": true,
+    "notes": "The assistant correctly identified the host country and provided a specific, dated population figure for the city proper, adhering to the rubric requirements."
+   }
+  },
+  {
+   "id": "cmp-db",
+   "category": "comparison",
+   "model": "groq:openai/gpt-oss-120b",
+   "message": "Compare PostgreSQL and MySQL for a small SaaS product. Keep it practical.",
+   "answer": "**Practical comparison of PostgreSQL vs MySQL for a small SaaS product (2026)** \n\n| Aspect | PostgreSQL | MySQL | Why it matters for a small SaaS |\n|--------|------------|-------|---------------------------------|\n| **Core strengths** | • Full-SQL compliance, rich window functions, CTEs, recursive queries<br>• True MVCC with DDL transactions → safe schema migrations<br>• Powerful extensibility (PostGIS, pgvector, TimescaleDB, Citus, 400+ extensions)[1][3] | • Simpler engine, slightly lower write-amplification overhead<br>• Very mature ecosystem for PHP/WordPress, Magento, WooCommerce<br>• Slightly lower learning curve for developers familiar with the LAMP stack[5] | PostgreSQL gives you advanced query features and extensions that let you add analytics, geospatial, AI-vector search, or multi-tenant row-level security without a separate service. MySQL is a solid default when you have legacy PHP/CMS code or need the widest pool of junior developers. |\n| **JSON & document handling** | JSONB with indexing, GIN/GiST, full-text search, and native operators; pgvector for embeddings[3] | JSON column type with basic indexing; no built-in vector support. | SaaS APIs that expose JSON payloads or need fast JSON queries benefit from PostgreSQL’s JSONB. If you need vector search (e.g., AI-augmented features) PostgreSQL is the clear winner. |\n| **Multi-tenant security** | Row-level security (RLS) built-in; policies can enforce tenant isolation without app logic[5] | No native RLS; must enforce in application or use separate schemas. | RLS reduces code complexity and risk of tenant data leakage. |\n| **Performance under load** | Comparable raw throughput for typical OLTP workloads; performance differences are usually query-design dependent rather than engine-dependent[1] | Slight edge on very high-write simple inserts due to lighter MVCC, but gap is small. | For a small SaaS the choice should be driven by feature needs, not raw speed. |\n| **Licensing & vendor lock-in** | PostgreSQL is BSD-style, no commercial licensing fees; extensions also open-source. No “Oracle surprise”[3] | MySQL is GPL-v2 (or commercial Oracle MySQL Enterprise); Oracle can add licensing changes. | PostgreSQL offers a more predictable cost model for long-term growth. |\n| **Managed-service pricing (AWS RDS, us-east-1)** | • Development db.t4g.micro ≈ $14 / mo (on-demand)[7]<br>• Production db.m5.large Multi-AZ + 500 GB gp3 ≈ $425 / mo[8] | Same instance classes cost the same as PostgreSQL (pricing is engine-agnostic)[7]<br>• Development db.t4g.micro ≈ $14 / mo (identical)[7] | Cost is essentially equal on AWS RDS; the decision is therefore driven by features rather than price. |\n| **Extended-support surcharge (post-EOL)** | PostgreSQL 13 reaches end-of-standard support 28 Feb 2026; extended support adds a surcharge if you stay on it[6] | MySQL 5.7 (and older 8.x versions) also incur extended-support fees (≈ $0.200 /vCPU-hr)[2] | Upgrading to a current major version (PostgreSQL 16+, MySQL 8.0+) avoids extra fees; both clouds charge similarly. |\n| **Ecosystem & tooling** | • Supabase, Neon, Vercel Postgres – PostgreSQL-only platforms that add auth, real-time, serverless branching.<br>• Strong ecosystem for migrations (pg_dump/pg_restore, pgAdmin, Prisma, Hasura).[3] | • PlanetScale, ClearDB historically offered MySQL-only DBaaS (PlanetScale free tier ended 2024).<br>• Wide range of PHP/WordPress plugins, ORMs (Sequelize, TypeORM).[3][5] | PostgreSQL’s modern cloud-native ecosystem is growing faster, giving you more “out-of-box” features for SaaS. MySQL still dominates traditional web-app stacks. |\n| **Scalability options** | Horizontal sharding via Citus, logical replication, built-in logical decoding, and native partitioning. | Horizontal scaling via MySQL Group Replication or external sharding layers (Vitess). | Both can scale, but PostgreSQL’s built-in sharding (Citus) is easier to adopt for a growing SaaS. |\n| **Community & support** | Large open-source community; many contributors; frequent releases (PostgreSQL 16 released 2023, 19 RC in 2026)[10] | Active community, but major releases are slower; Oracle provides commercial support. | Both have solid support options; PostgreSQL’s release cadence gives quicker access to new features. |\n\n### Bottom-line recommendation for a **small SaaS**\n\n| Situation | Recommended DB |\n|-----------|----------------|\n| Starting fresh, need JSON, complex reporting, row-level security, or plan to add AI/vector search | **PostgreSQL** |\n| Existing PHP/WordPress or other LAMP-based codebase, or you need the widest pool of junior devs | **MySQL** |\n| Primary concern is cost on managed services (AWS RDS, Azure) | **Either** – pricing is essentially the same; choose based on feature fit. |\n| Want to avoid future licensing surprises and have a liberal open-source license | **PostgreSQL** |\n| Need built-in geospatial or time-series extensions without extra services | **PostgreSQL** (PostGIS, TimescaleDB) |\n\n### What could not be verified\n\n* **Azure Database for PostgreSQL/MySQL pricing** – I was unable to retrieve up-to-date Azure pricing within the current search budget, so cost comparisons are limited to AWS RDS (the most commonly used cloud for SaaS). \n* **Exact pricing for other managed providers (e.g., Google Cloud SQL, Supabase, Neon)** – the evidence gathered focused on AWS; those providers may have different price points but were not captured. \n\nIf you need Azure-specific numbers or a deeper dive into other cloud providers, let me know and I can run additional searches.",
+   "checks": [
+    {
+     "name": "answered",
+     "ok": true
+    },
+    {
+     "name": "matches /postgres/",
+     "ok": true
+    },
+    {
+     "name": "matches /mysql/",
+     "ok": true
+    }
+   ],
+   "pass": true,
+   "trace": {
+    "model": "groq:openai/gpt-oss-120b",
+    "totalMs": 97489,
+    "timings": [
+     {
+      "stage": "context",
+      "startMs": 0,
+      "endMs": 1,
+      "detail": "0 episodes, 0 claims"
+     },
+     {
+      "stage": "retrieval",
+      "startMs": 951,
+      "endMs": 2639,
+      "detail": "19 urls, 0/0 pages, 6 passages"
+     },
+     {
+      "stage": "model(tool)",
+      "startMs": 350,
+      "endMs": 2640,
+      "detail": "1037 in / 256 out"
+     },
+     {
+      "stage": "retrieval",
+      "startMs": 24572,
+      "endMs": 28872,
+      "detail": "8 urls, 4/4 pages, 7 passages"
+     },
+     {
+      "stage": "model(tool)",
+      "startMs": 24130,
+      "endMs": 28873,
+      "detail": "3068 in / 143 out"
+     },
+     {
+      "stage": "model(tool)",
+      "startMs": 61359,
+      "endMs": 61712,
+      "detail": "4792 in / 74 out"
+     },
+     {
+      "stage": "model(answer)",
+      "startMs": 93324,
+      "endMs": 97486,
+      "detail": "4940 in / 1474 out"
+     }
+    ],
+    "usage": {
+     "inputTokens": 13837,
+     "outputTokens": 1947,
+     "cachedInputTokens": 1536,
+     "steps": 4
+    },
+    "searches": [
+     {
+      "queries": [
+       "PostgreSQL vs MySQL SaaS 2024 comparison",
+       "PostgreSQL vs MySQL for small SaaS product 2025",
+       "AWS RDS PostgreSQL pricing 2026",
+       "AWS RDS MySQL pricing 2026"
+      ],
+      "depth": "snippets",
+      "hits": 24,
+      "cached": false
+     },
+     {
+      "queries": [
+       "AWS RDS PostgreSQL pricing us-east-1 2026",
+       "AWS RDS MySQL pricing us-east-1 2026"
+      ],
+      "depth": "read",
+      "hits": 12,
+      "cached": false
+     }
+    ],
+    "citations": {
+     "cited": [
+      1,
+      2,
+      3,
+      5,
+      6,
+      7,
+      8,
+      10
+     ],
+     "dropped": []
+    },
+    "warnings": [],
+    "memory": {
+     "episodes": 0,
+     "claims": 0,
+     "hadRecord": null
+    },
+    "usedFallbackModel": false,
+    "firstTokenMs": 93714
+   },
+   "judged": {
+    "score": 5,
+    "correct": true,
+    "grounded": true,
+    "notes": "The answer is exceptionally well-structured, provides a clear comparison table, and offers a balanced, practical recommendation tailored to the user's context."
+   }
+  },
+  {
+   "id": "cmp-hosting",
+   "category": "comparison",
+   "model": "groq:openai/gpt-oss-120b",
+   "message": "Compare the free and entry paid plans of Vercel, Netlify and Cloudflare Pages.",
+   "answer": "**Free vs. entry-paid plans (2026)** \n\n| Provider | Free plan (name) | Free-plan limits & key features | Entry-paid plan (name) | Entry-paid price (per seat / month) | Entry-paid limits & added features |\n|----------|------------------|--------------------------------|------------------------|--------------------------------------|--------------------------------------|\n| **Vercel** | **Hobby** (Free) | • 100 GB fast data transfer per month<br>• 1 M edge requests per month<br>• 1 M serverless-function invocations<br>• 4 h of CPU time<br>• 1 GB Blob storage<br>• 5 000 image transformations<br>• Single-user only, community support<br>• No commercial use | **Pro** | $20 / developer seat / month | • 1 TB fast data transfer (overage $0.15 / GB) [9]<br>• 10 M edge requests<br>• Higher function-invocation allowance (no hard cap, overage billed)<br>• 50 GB Blob storage<br>• 50 000 image transformations<br>• 300 s function timeout<br>• Team collaboration (multiple seats, viewer roles)<br>• Advanced analytics, role-based access, password-protected previews, email support [9] |\n| **Netlify** | **Free** | • 300 build minutes per month (≈ 15 GB bandwidth) [1]<br>• Unlimited static sites & custom domains<br>• 125 k serverless-function invocations<br>• 100 GB bandwidth (shared)<br>• 1 team member (solo) [1] | **Pro** | $20 / member / month (often quoted as $19 / month) [5] | • 1 000 build minutes per month (or higher depending on plan tier) [5]<br>• 100 GB bandwidth (or higher) [5]<br>• Unlimited team members (paid seats)<br>• Advanced build concurrency, password-protected deploy previews, role-based access<br>• Faster builds, priority support, analytics [5] |\n| **Cloudflare Pages** | **Free** | • Unlimited static bandwidth & asset requests<br>• 500 builds / month, 1 concurrent build<br>• 100 000 Pages-Functions (Workers) requests per day (shared with Workers Free) [2][3]<br>• Unlimited custom domains, SSL, edge caching<br>• Community support | **Pro** | $20 / month (account-level, not per seat) [2][3] | • 5 000 builds / month, 5 concurrent builds<br>• 10 M Workers (Pages Functions) requests per day (via Workers Paid) [2][3]<br>• 50 ms CPU per request (higher than Free) [2][3]<br>• Access to Workers Paid pricing for additional function usage ($5 / month for 10 M requests, then $0.30 / M) [2]<br>• Priority support, additional security & compliance features, custom analytics [2] |\n\n### What could not be verified\n* Exact **Netlify Pro** build-minute and bandwidth caps for 2026 – the sources give a typical $19-$20 price and mention “higher” limits but do not list precise numbers.\n* Any **per-seat** pricing for Cloudflare Pages Pro – Cloudflare charges the Pro tier per account, not per developer seat; the sources do not specify a seat-based model.\n* Detailed **Vercel Pro** function-invocation limits – the source notes “higher allowance + overage” but does not give a concrete monthly cap.\n* Whether Vercel’s “Fast Data Transfer” includes both CDN egress and edge-function egress – the source mentions 1 TB fast data transfer but does not break down the components.",
+   "checks": [
+    {
+     "name": "answered",
+     "ok": true
+    },
+    {
+     "name": "searched",
+     "ok": true,
+     "detail": "searches=2"
+    },
+    {
+     "name": "matches /vercel/",
+     "ok": true
+    },
+    {
+     "name": "matches /netlify/",
+     "ok": true
+    },
+    {
+     "name": "matches /cloudflare/",
+     "ok": true
+    },
+    {
+     "name": ">=2 citation(s)",
+     "ok": true,
+     "detail": "cited=5"
+    }
+   ],
+   "pass": true,
+   "trace": {
+    "model": "groq:openai/gpt-oss-120b",
+    "totalMs": 57341,
+    "timings": [
+     {
+      "stage": "context",
+      "startMs": 1,
+      "endMs": 2,
+      "detail": "0 episodes, 0 claims"
+     },
+     {
+      "stage": "retrieval",
+      "startMs": 1008,
+      "endMs": 4785,
+      "detail": "18 urls, 4/4 pages, 8 passages"
+     },
+     {
+      "stage": "model(tool)",
+      "startMs": 419,
+      "endMs": 4785,
+      "detail": "1039 in / 239 out"
+     },
+     {
+      "stage": "retrieval",
+      "startMs": 34179,
+      "endMs": 42045,
+      "detail": "11 urls, 3/4 pages, 6 passages"
+     },
+     {
+      "stage": "model(tool)",
+      "startMs": 33272,
+      "endMs": 42045,
+      "detail": "3170 in / 80 out"
+     },
+     {
+      "stage": "model(answer)",
+      "startMs": 53733,
+      "endMs": 57339,
+      "detail": "4519 in / 875 out"
+     }
+    ],
+    "usage": {
+     "inputTokens": 8728,
+     "outputTokens": 1194,
+     "cachedInputTokens": 3840,
+     "steps": 3
+    },
+    "searches": [
+     {
+      "queries": [
+       "Vercel pricing 2026",
+       "Netlify pricing 2026",
+       "Cloudflare Pages pricing 2026"
+      ],
+      "depth": "read",
+      "hits": 18,
+      "cached": false
+     },
+     {
+      "queries": [
+       "Vercel pricing page 2026",
+       "Vercel Pro plan features 2026"
+      ],
+      "depth": "read",
+      "hits": 12,
+      "cached": false
+     }
+    ],
+    "citations": {
+     "cited": [
+      1,
+      2,
+      3,
+      5,
+      9
+     ],
+     "dropped": []
+    },
+    "warnings": [],
+    "memory": {
+     "episodes": 0,
+     "claims": 0,
+     "hadRecord": null
+    },
+    "usedFallbackModel": false,
+    "firstTokenMs": 54258
+   },
+   "judged": {
+    "score": 5,
+    "correct": true,
+    "grounded": true,
+    "notes": "The assistant provided a clear, well-structured comparison table with accurate distinctions between per-seat and account-level pricing, and transparently flagged areas where specific 2026 data points were ambiguous."
+   }
+  },
+  {
+   "id": "nr-yesterday",
+   "category": "no_record",
+   "model": "groq:openai/gpt-oss-120b",
+   "message": "What did we discuss yesterday?",
+   "answer": "I have no record of a conversation on Friday, 13 November 2026. The nearest stored dates are 3 November 2026 (when we talked about managed Postgres hosting options) and 8 November 2026 (when we created a shortlist of CRM tools for your 20-person sales team).",
+   "checks": [
+    {
+     "name": "answered",
+     "ok": true
+    },
+    {
+     "name": "did not search",
+     "ok": true,
+     "detail": "searches=0"
+    },
+    {
+     "name": "matches /(no record|don.t have|do not have|no earlier|not (stored|recorded)|nothing)/",
+     "ok": true
+    }
+   ],
+   "pass": true,
+   "trace": {
+    "model": "groq:openai/gpt-oss-120b",
+    "totalMs": 1030,
+    "timings": [
+     {
+      "stage": "context",
+      "startMs": 1,
+      "endMs": 64,
+      "detail": "0 episodes, 0 claims"
+     },
+     {
+      "stage": "model(answer)",
+      "startMs": 336,
+      "endMs": 1029,
+      "detail": "1186 in / 166 out"
+     }
+    ],
+    "usage": {
+     "inputTokens": 1186,
+     "outputTokens": 166,
+     "cachedInputTokens": 768,
+     "steps": 1
+    },
+    "searches": [],
+    "citations": {
+     "cited": [],
+     "dropped": []
+    },
+    "warnings": [],
+    "memory": {
+     "episodes": 0,
+     "claims": 0,
+     "hadRecord": false
+    },
+    "usedFallbackModel": false,
+    "firstTokenMs": 878
+   },
+   "judged": {
+    "score": 5,
+    "correct": true,
+    "grounded": true,
+    "notes": "The assistant correctly identified that no conversation occurred on the requested date and provided accurate context regarding the nearest available interaction dates."
+   }
+  }
+ ]
+}

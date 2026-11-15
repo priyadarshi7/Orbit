@@ -13,6 +13,7 @@ import { LEGACY_USER } from "../memory/store";
 import { bearer, Sessions } from "./auth";
 import { loadBenchmarks } from "./benchmarks";
 import { ConcurrencyGate, TokenBucketLimiter, type RateLimiter } from "./ratelimit";
+import type { Checkpoint } from "../agent/checkpoint";
 import { RunManager, type ActiveRun } from "./runs";
 
 const ChatBody = z.object({
@@ -115,7 +116,18 @@ export function buildServer(app: ReturnType<typeof createApp>, opts: ServerOptio
     return c.json({
       ...conv,
       messages: s.getMessages(conv.id),
-      run: run ? { id: run.id, status: run.status, error: run.error } : null,
+      run: run
+        ? {
+            id: run.id,
+            status: run.status,
+            error: run.error,
+            // Can continue from where it stopped: it was cut off, and nothing has been added after the question.
+            resumable:
+              (run.status === "interrupted" || run.status === "failed") &&
+              run.userMessageId !== null &&
+              s.getMessages(conv.id).at(-1)?.id === run.userMessageId,
+          }
+        : null,
     });
   });
 
@@ -186,6 +198,20 @@ export function buildServer(app: ReturnType<typeof createApp>, opts: ServerOptio
     return past ? c.json({ error: "run_gone", status: past.status, conversationId: past.conversationId }, 409) : c.json({ error: "not found" }, 404);
   };
 
+  /** A turn can fan out into many model and search calls, so cap how fast and how many at once. Returns the slot's release, or the refusal. */
+  const admit = (c: Context<Env>, userId: string): (() => void) | Response => {
+    const byUser = limiter.take(`chat:${userId}`, limits.chatPerMin);
+    if (!byUser.ok) return tooMany(c, byUser.retryAfterMs, "You're sending messages too fast.");
+    const byIp = limiter.take(`chat-ip:${clientIp(c)}`, limits.chatPerMin * 3);
+    if (!byIp.ok) return tooMany(c, byIp.retryAfterMs, "Too many requests from this address.");
+    const release = gate.acquire(userId, limits.maxConcurrentTurns);
+    if (!release) {
+      c.header("Retry-After", "5");
+      return c.json({ error: "busy", message: "You already have answers in progress. Wait for one to finish or stop it first.", retryAfterSeconds: 5 }, 429);
+    }
+    return release;
+  };
+
   authed.post("/chat", bodyLimit({ maxSize: 64 * 1024, onError: (c) => c.json({ error: "too_large", message: "That message is too large." }, 413) }), async (c) => {
     const parsed = ChatBody.safeParse(await c.req.json().catch(() => null));
     if (!parsed.success) return c.json({ error: "invalid request", issues: parsed.error.issues.slice(0, 3) }, 400);
@@ -199,16 +225,8 @@ export function buildServer(app: ReturnType<typeof createApp>, opts: ServerOptio
       if (deps.store.forUser(userId).runByRequest(body.requestId)) return runGone(c, userId, body.requestId);
     }
 
-    // A turn can fan out into many model and search calls, so cap how fast and how many at once.
-    const byUser = limiter.take(`chat:${userId}`, limits.chatPerMin);
-    if (!byUser.ok) return tooMany(c, byUser.retryAfterMs, "You're sending messages too fast.");
-    const byIp = limiter.take(`chat-ip:${clientIp(c)}`, limits.chatPerMin * 3);
-    if (!byIp.ok) return tooMany(c, byIp.retryAfterMs, "Too many requests from this address.");
-    const release = gate.acquire(userId, limits.maxConcurrentTurns);
-    if (!release) {
-      c.header("Retry-After", "5");
-      return c.json({ error: "busy", message: "You already have answers in progress. Wait for one to finish or stop it first.", retryAfterSeconds: 5 }, 429);
-    }
+    const release = admit(c, userId);
+    if (typeof release !== "function") return release;
 
     let run: ActiveRun;
     try {
@@ -224,6 +242,54 @@ export function buildServer(app: ReturnType<typeof createApp>, opts: ServerOptio
   authed.get("/runs/:id/events", (c) => {
     const run = runs.get(c.get("userId"), c.req.param("id"));
     return run ? attach(c, run, resumeAfter(c)) : runGone(c, c.get("userId"), undefined, c.req.param("id"));
+  });
+
+  // Continue an interrupted answer from its last checkpoint: the question is already saved, so none is added.
+  // Same request id on a repeat, so a double-click or a reconnect attaches to the one resumed run.
+  authed.post("/runs/:id/resume", async (c) => {
+    const userId = c.get("userId");
+    const s = store(c);
+    const old = s.getRun(c.req.param("id"));
+    if (!old) return c.json({ error: "not found" }, 404);
+    const requestId = `resume:${old.id}`;
+    const live = runs.byRequest(userId, requestId);
+    if (live) return attach(c, live, resumeAfter(c));
+    if (s.runByRequest(requestId)) return runGone(c, userId, requestId);
+
+    const last = old.conversationId ? s.getMessages(old.conversationId).at(-1) : undefined;
+    if ((old.status !== "interrupted" && old.status !== "failed") || !old.conversationId || !old.userMessageId || last?.id !== old.userMessageId || last.role !== "user") {
+      return c.json({ error: "not_resumable", message: "That answer can't be resumed (it finished, or the conversation has moved on)." }, 409);
+    }
+    const body = z.object({ tz: z.string().max(64).optional() }).safeParse(await c.req.json().catch(() => ({})));
+    let saved: Checkpoint | undefined;
+    try {
+      const raw = s.getCheckpoint(old.id);
+      saved = raw ? (JSON.parse(raw) as Checkpoint) : undefined;
+    } catch {
+      saved = undefined; // an unreadable checkpoint means starting this turn over, not failing
+    }
+
+    const release = admit(c, userId);
+    if (typeof release !== "function") return release;
+    let run: ActiveRun;
+    try {
+      run = runs.start(
+        userId,
+        {
+          message: last.content,
+          tz: body.success ? body.data.tz : undefined,
+          requestId,
+          resumedFrom: old.id,
+          resume: { conversationId: old.conversationId, userMessageId: old.userMessageId },
+          saved,
+        },
+        release,
+      );
+    } catch {
+      release();
+      return runGone(c, userId, requestId);
+    }
+    return attach(c, run, -1);
   });
 
   // The Stop button: an explicit cancel, since a closed connection no longer stops a run.

@@ -78,6 +78,8 @@ export interface RunRow {
   assistantMessageId: string | null;
   startedAt: string;
   finishedAt: string | null;
+  /** The interrupted run this one continues. */
+  resumedFrom: string | null;
 }
 
 export interface OutboxJob {
@@ -171,6 +173,8 @@ CREATE TABLE IF NOT EXISTS runs (
   assistant_message_id TEXT,
   started_at TEXT NOT NULL,
   finished_at TEXT,
+  checkpoint TEXT,
+  resumed_from TEXT,
   UNIQUE (user_id, request_id)
 );
 CREATE INDEX IF NOT EXISTS idx_runs_conv ON runs(conversation_id, started_at);
@@ -211,6 +215,9 @@ function migrate(db: Database.Database): void {
       DROP TABLE profile_facts;
       ALTER TABLE profile_facts_new RENAME TO profile_facts;
     `);
+  }
+  for (const col of ["checkpoint", "resumed_from"]) {
+    if (!hasCol("runs", col)) db.exec(`ALTER TABLE runs ADD COLUMN ${col} TEXT`);
   }
   db.exec(`
     CREATE INDEX IF NOT EXISTS idx_conversations_user ON conversations(user_id, updated_at);
@@ -675,6 +682,7 @@ export class MemoryStore {
     assistant_message_id: string | null;
     started_at: string;
     finished_at: string | null;
+    resumed_from: string | null;
   }): RunRow {
     return {
       id: r.id,
@@ -686,13 +694,24 @@ export class MemoryStore {
       assistantMessageId: r.assistant_message_id,
       startedAt: r.started_at,
       finishedAt: r.finished_at,
+      resumedFrom: r.resumed_from,
     };
   }
 
-  createRun(r: { id: string; requestId?: string | null; conversationId?: string | null; startedAt: string }): void {
+  createRun(r: { id: string; requestId?: string | null; conversationId?: string | null; startedAt: string; resumedFrom?: string | null }): void {
     this.db
-      .prepare("INSERT INTO runs (id, user_id, request_id, conversation_id, started_at) VALUES (?,?,?,?,?)")
-      .run(r.id, this.userId, r.requestId ?? null, r.conversationId ?? null, r.startedAt);
+      .prepare("INSERT INTO runs (id, user_id, request_id, conversation_id, started_at, resumed_from) VALUES (?,?,?,?,?,?)")
+      .run(r.id, this.userId, r.requestId ?? null, r.conversationId ?? null, r.startedAt, r.resumedFrom ?? null);
+  }
+
+  /** Progress of a turn in flight (JSON, see agent/checkpoint.ts). Cleared when the turn finishes cleanly. */
+  saveCheckpoint(id: string, json: string): void {
+    this.db.prepare("UPDATE runs SET checkpoint = ? WHERE id = ? AND user_id = ? AND status = 'running'").run(json, id, this.userId);
+  }
+
+  getCheckpoint(id: string): string | null {
+    const r = this.db.prepare("SELECT checkpoint FROM runs WHERE id = ? AND user_id = ?").get(id, this.userId) as { checkpoint: string | null } | undefined;
+    return r?.checkpoint ?? null;
   }
 
   /** Once the turn has saved the question, record which conversation and message it is about. */
@@ -704,8 +723,11 @@ export class MemoryStore {
 
   finishRun(id: string, status: Exclude<RunStatus, "running">, at: string, extra: { error?: string; assistantMessageId?: string } = {}): void {
     this.db
-      .prepare("UPDATE runs SET status = ?, finished_at = ?, error = ?, assistant_message_id = ? WHERE id = ? AND user_id = ? AND status = 'running'")
-      .run(status, at, extra.error ?? null, extra.assistantMessageId ?? null, id, this.userId);
+      .prepare(
+        // A finished answer needs no checkpoint; a failed, stopped-early or interrupted turn keeps it so it can be resumed.
+        "UPDATE runs SET status = ?, finished_at = ?, error = ?, assistant_message_id = ?, checkpoint = CASE WHEN ? = 'done' THEN NULL ELSE checkpoint END WHERE id = ? AND user_id = ? AND status = 'running'",
+      )
+      .run(status, at, extra.error ?? null, extra.assistantMessageId ?? null, status, id, this.userId);
   }
 
   getRun(id: string): RunRow | null {

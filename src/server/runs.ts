@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { AgentEvent } from "../agent/events";
+import type { Checkpoint, CheckpointIO } from "../agent/checkpoint";
 import { runTurn, type AgentDeps, type TurnRequest } from "../agent/run";
 import type { RunStatus } from "../memory/store";
 
@@ -43,7 +44,12 @@ export interface RunManagerOptions {
   retainMs?: number;
 }
 
-export type StartBody = Omit<TurnRequest, "signal"> & { requestId?: string };
+export type StartBody = Omit<TurnRequest, "signal" | "checkpoint"> & {
+  requestId?: string;
+  /** Continuing an interrupted run: which one, and what it had saved. */
+  resumedFrom?: string;
+  saved?: Checkpoint;
+};
 
 export class RunManager {
   private readonly runs = new Map<string, ActiveRun>();
@@ -83,8 +89,9 @@ export class RunManager {
     this.deps.store.forUser(userId).createRun({
       id,
       requestId: body.requestId,
-      conversationId: body.conversationId,
+      conversationId: body.resume?.conversationId ?? body.conversationId,
       startedAt: this.deps.clock.now().toISOString(),
+      resumedFrom: body.resumedFrom,
     });
     this.runs.set(id, run);
     if (body.requestId) this.byRequestKey.set(`${userId}:${body.requestId}`, id);
@@ -134,13 +141,28 @@ export class RunManager {
     let done: Extract<AgentEvent, { type: "done" }> | undefined;
     let failed: string | undefined;
 
+    // Progress is saved after each finished step, so a crash costs at most the step that was running.
+    const progress: Checkpoint = { v: 1, ...(body.saved ?? {}) };
+    const checkpoint: CheckpointIO = {
+      resume: body.saved,
+      save: (patch) => {
+        Object.assign(progress, patch);
+        try {
+          store.saveCheckpoint(run.id, JSON.stringify(progress));
+        } catch {
+          /* a failed save only means a later resume starts further back */
+        }
+      },
+    };
+
     run.timer = setTimeout(() => {
       run.ac.abort();
       this.finish(run, "failed", release, { error: "This answer took too long and was stopped." });
     }, this.opts.hardTimeoutMs);
+    run.timer.unref?.();
 
     try {
-      for await (const ev of runTurn(turnDeps, { ...body, signal: run.ac.signal })) {
+      for await (const ev of runTurn(turnDeps, { ...body, signal: run.ac.signal, checkpoint })) {
         if (run.finished) continue; // a late event from a turn that was already given up on
         const out: AgentEvent = ev.type === "start" ? { ...ev, runId: run.id } : ev;
         this.push(run, out);

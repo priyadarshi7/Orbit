@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { api, streamChat, type AgentEvent, type ConversationSummary, type Health, type Mode, type SourceInfo, type TurnTrace } from "@/lib/api";
+import { api, ApiError, attachRun, streamChat, type AgentEvent, type ConversationSummary, type Health, type Mode, type SourceInfo, type TurnTrace } from "@/lib/api";
 
 export interface UiMessage {
   id: string;
@@ -91,20 +91,27 @@ export function useChat() {
     [patch],
   );
 
-  const send = useCallback(
-    async (text: string, convId = conversationId) => {
-      const question = text.trim();
-      if (!question || busy) return;
-      const aid = uid();
-      const userUid = uid();
-      setMessages((ms) => [
-        ...ms,
-        { id: userUid, role: "user", content: question, sources: [] },
-        { id: aid, role: "assistant", content: "", sources: [], streaming: true, phase: "Starting…", startedAt: Date.now() },
-      ]);
+  const loadRef = useRef<((id: string) => Promise<void>) | null>(null);
+  const runIdRef = useRef<string | null>(null);
+  const stoppingRef = useRef(false);
+
+  /**
+   * Applies one run's events to one assistant message. The same code serves a fresh send and re-attaching to a
+   * run that is still going (after a reload), because both are just "a stream of events for this run".
+   */
+  const drive = useCallback(
+    async (
+      aid: string,
+      userUid: string,
+      convId: string,
+      question: string,
+      stream: (onEvent: (e: AgentEvent) => void, signal: AbortSignal, onRun: (id: string) => void) => Promise<void>,
+    ) => {
       setBusy(true);
       const ac = new AbortController();
       abortRef.current = ac;
+      runIdRef.current = null;
+      stoppingRef.current = false;
 
       let answerText = "";
       const onEvent = (e: AgentEvent) => {
@@ -115,6 +122,7 @@ export function useChat() {
           case "start":
             // The server saved the question: remember its id (for edit/regenerate) and the conversation it landed in.
             patch(userUid, (m) => ({ ...m, serverId: e.userMessageId }));
+            if (e.runId) runIdRef.current = e.runId;
             if (e.conversationId !== convId) setConversationId(e.conversationId);
             break;
           case "route":
@@ -140,7 +148,7 @@ export function useChat() {
             patch(aid, (m) => ({ ...m, content: e.text, sources: e.sources }));
             break;
           case "done":
-            patch(aid, (m) => ({ ...m, streaming: false, phase: undefined, trace: e.trace, serverId: e.messageId }));
+            patch(aid, (m) => ({ ...m, streaming: false, phase: undefined, trace: e.trace, serverId: e.messageId, stopped: stoppingRef.current || undefined }));
             void fetchSuggestions(aid, question, answerText);
             break;
           case "error":
@@ -150,32 +158,56 @@ export function useChat() {
       };
 
       try {
-        await streamChat({ message: question, conversationId: convId, tz: tz(), mode }, onEvent, ac.signal);
+        await stream(onEvent, ac.signal, (id) => (runIdRef.current = id));
       } catch (err) {
-        const aborted = ac.signal.aborted;
-        patch(aid, (m) => ({
-          ...m,
-          streaming: false,
-          phase: undefined,
-          stopped: aborted,
-          error: aborted ? undefined : err instanceof Error ? err.message : "Connection lost.",
-        }));
+        if (err instanceof ApiError && err.status === 409) {
+          // The run is over and no longer in server memory (a restart, a long wait): show what was saved.
+          await loadRef.current?.(convId).catch(() => undefined);
+        } else {
+          const aborted = ac.signal.aborted;
+          patch(aid, (m) => ({
+            ...m,
+            streaming: false,
+            phase: undefined,
+            stopped: aborted,
+            error: aborted ? undefined : err instanceof Error ? err.message : "Connection lost.",
+          }));
+        }
       } finally {
         patch(aid, (m) => (m.streaming ? { ...m, streaming: false, phase: undefined } : m));
         setBusy(false);
-        abortRef.current = null;
+        if (abortRef.current === ac) abortRef.current = null;
         refreshList();
       }
     },
-    [busy, conversationId, mode, patch, refreshList, fetchSuggestions],
+    [patch, refreshList, fetchSuggestions],
   );
 
-  const open = useCallback(async (id: string) => {
-    abortRef.current?.abort();
-    const c = await api.conversation(id);
-    setConversationId(c.id);
-    setMessages(
-      c.messages.map((m) => ({
+  const send = useCallback(
+    async (text: string, convId = conversationId) => {
+      const question = text.trim();
+      if (!question || busy) return;
+      const aid = uid();
+      const userUid = uid();
+      const requestId = uid(); // the same id on a reconnect attaches to this run instead of starting another
+      setMessages((ms) => [
+        ...ms,
+        { id: userUid, role: "user", content: question, sources: [] },
+        { id: aid, role: "assistant", content: "", sources: [], streaming: true, phase: "Starting…", startedAt: Date.now() },
+      ]);
+      await drive(aid, userUid, convId, question, (onEvent, signal, onRun) =>
+        streamChat({ message: question, conversationId: convId, tz: tz(), mode, requestId }, onEvent, signal, onRun),
+      );
+    },
+    [busy, conversationId, mode, drive],
+  );
+
+  const open = useCallback(
+    async (id: string) => {
+      abortRef.current?.abort(); // only closes this connection: a running answer carries on server-side
+      const c = await api.conversation(id);
+      setConversationId(c.id);
+      const msgs: UiMessage[] = c.messages.map((m) => ({
         id: m.id,
         role: m.role,
         content: m.content,
@@ -185,14 +217,37 @@ export function useChat() {
         route: m.meta?.trace?.path ? { path: m.meta.trace.path, reason: m.meta.trace.routeReason ?? "" } : undefined,
         plan: m.meta?.trace?.plan?.map((s) => ({ ...s, state: "done" as const })),
         stopped: m.meta?.stopped,
-      })),
-    );
-  }, []);
+      }));
+      const last = c.messages.at(-1);
+      const run = c.run;
+      // A question with no answer after it is either still being answered (follow it) or was cut off (say so, offer Retry).
+      if (run && last?.role === "user") {
+        const aid = uid();
+        if (run.status === "running") {
+          msgs.push({ id: aid, role: "assistant", content: "", sources: [], streaming: true, phase: "Reconnecting…", startedAt: Date.now() });
+          setMessages(msgs);
+          void drive(aid, last.id, c.id, last.content, (onEvent, signal, onRun) => attachRun(run.id, onEvent, signal, onRun));
+          return;
+        }
+        if (run.status === "interrupted" || run.status === "failed") {
+          msgs.push({ id: aid, role: "assistant", content: "", sources: [], error: run.error ?? "This answer was interrupted." });
+        }
+      }
+      setMessages(msgs);
+    },
+    [drive],
+  );
+  loadRef.current = open;
 
   const newChat = useCallback(() => {
     abortRef.current?.abort();
     setConversationId(uid());
     setMessages([]);
+    try {
+      sessionStorage.removeItem("orbit.conv");
+    } catch {
+      /* optional */
+    }
   }, []);
 
   const remove = useCallback(
@@ -236,14 +291,41 @@ export function useChat() {
     [messages, send, conversationId],
   );
 
-  const stop = useCallback(() => abortRef.current?.abort(), []);
+  /** Stop is a request to the server: it ends the run with the answer so far, which then arrives on this same stream. */
+  const stop = useCallback(() => {
+    const ac = abortRef.current;
+    const id = runIdRef.current;
+    stoppingRef.current = true;
+    if (!id) {
+      ac?.abort(); // the turn has not started on the server yet
+      return;
+    }
+    void api.cancel(id).catch(() => ac?.abort());
+    setTimeout(() => ac?.abort(), 4000); // safety net if the closing events never arrive
+  }, []);
 
   useEffect(() => {
     refreshList();
     api.health().then(setHealth).catch(() => setHealth(null));
-    const c = new URLSearchParams(location.search).get("c"); // deep link: /?c=<conversation id>
+    // Deep link (/?c=<id>), else the chat this tab had open, so a refresh lands back in it (and re-attaches to a running answer).
+    let remembered: string | null = null;
+    try {
+      remembered = sessionStorage.getItem("orbit.conv");
+    } catch {
+      /* optional */
+    }
+    const c = new URLSearchParams(location.search).get("c") ?? remembered;
     if (c) void open(c).catch(() => undefined);
   }, [open, refreshList]);
+
+  useEffect(() => {
+    if (messages.length === 0) return;
+    try {
+      sessionStorage.setItem("orbit.conv", conversationId);
+    } catch {
+      /* optional */
+    }
+  }, [conversationId, messages.length]);
 
   const modelNote = useMemo(() => {
     if (!health) return "API offline";

@@ -115,11 +115,13 @@ async function publicJson<T>(url: string): Promise<T> {
 export type { BenchRun, BenchModel, BenchCase } from "../../../src/server/benchmarks";
 import type { BenchRun } from "../../../src/server/benchmarks";
 
+export type RunInfo = { id: string; status: "running" | "done" | "failed" | "stopped" | "interrupted"; error: string | null };
+
 export const api = {
   benchmarks: () => publicJson<BenchRun[]>("/api/benchmarks"),
   health: () => publicJson<Health>("/api/health"),
   conversations: () => json<ConversationSummary[]>("/api/conversations"),
-  conversation: (id: string) => json<{ id: string; title: string; messages: StoredMessage[] }>(`/api/conversations/${id}`),
+  conversation: (id: string) => json<{ id: string; title: string; messages: StoredMessage[]; run: RunInfo | null }>(`/api/conversations/${id}`),
   remove: (id: string) => json<{ ok: boolean }>(`/api/conversations/${id}`, { method: "DELETE" }),
   /** Edit or regenerate: remove this message and everything after it (and the memory those turns wrote). */
   rewind: (conversationId: string, fromMessageId: string) =>
@@ -128,6 +130,8 @@ export const api = {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ fromMessageId }),
     }),
+  /** Stop a run. The server finishes it with the partial answer, so the stream is left open to deliver that. */
+  cancel: (runId: string) => json<{ ok: boolean }>(`/api/runs/${runId}/cancel`, { method: "POST" }),
   memory: () => json<MemoryView>("/api/memory"),
   deleteFact: (id: number) => json<{ ok: boolean }>(`/api/memory/facts/${id}`, { method: "DELETE" }),
   deleteClaim: (id: number) => json<{ ok: boolean }>(`/api/memory/claims/${id}`, { method: "DELETE" }),
@@ -139,37 +143,90 @@ export const api = {
     }),
 };
 
-/** POST /api/chat and parse the SSE frames into typed events. */
-export async function streamChat(
-  body: { message: string; conversationId: string; tz: string; mode?: "auto" | "fast" | "deep" },
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+const MAX_RECONNECTS = 6;
+
+/**
+ * Follows one run's event stream and survives a dropped connection. Every frame carries a sequence id; after a
+ * break the stream is reopened from the last id seen, so nothing is missed or repeated, and the server run
+ * is never restarted. Gives up (throws) only after repeated failures or when the user aborts.
+ */
+async function follow(
+  open: (lastSeq: number) => Promise<Response>,
   onEvent: (e: AgentEvent) => void,
   signal: AbortSignal,
+  onRun?: (runId: string) => void,
 ): Promise<void> {
-  const res = await authFetch("/api/chat", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(body),
-    signal,
-  });
-  if (!res.ok) throw await failure(res);
-  if (!res.body) throw new Error("Empty response");
-  const reader = res.body.getReader();
-  const dec = new TextDecoder();
-  let buf = "";
+  let last = -1;
+  let finished = false;
+  let failures = 0;
   while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buf += dec.decode(value, { stream: true });
-    let i: number;
-    while ((i = buf.indexOf("\n\n")) >= 0) {
-      const frame = buf.slice(0, i);
-      buf = buf.slice(i + 2);
-      const data = frame
-        .split("\n")
-        .filter((l) => l.startsWith("data:"))
-        .map((l) => l.slice(5).trimStart())
-        .join("\n");
-      if (data) onEvent(JSON.parse(data) as AgentEvent);
+    try {
+      const res = await open(last);
+      if (!res.ok) throw await failure(res); // a 409 "run_gone" or a rate limit is final, not retried
+      if (!res.body) throw new Error("Empty response");
+      const runId = res.headers.get("x-run-id");
+      if (runId) onRun?.(runId);
+      const reader = res.body.getReader();
+      const dec = new TextDecoder();
+      let buf = "";
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, { stream: true });
+        let i: number;
+        while ((i = buf.indexOf("\n\n")) >= 0) {
+          const frame = buf.slice(0, i);
+          buf = buf.slice(i + 2);
+          const id = frame.match(/^id: (\d+)$/m)?.[1];
+          const data = frame
+            .split("\n")
+            .filter((l) => l.startsWith("data:"))
+            .map((l) => l.slice(5).trimStart())
+            .join("\n");
+          if (!data) continue;
+          if (id !== undefined) {
+            if (Number(id) <= last) continue;
+            last = Number(id);
+          }
+          failures = 0;
+          const ev = JSON.parse(data) as AgentEvent;
+          onEvent(ev);
+          if (ev.type === "done" || ev.type === "error") finished = true;
+        }
+      }
+      if (finished) return;
+    } catch (e) {
+      if (signal.aborted || e instanceof ApiError || finished) throw e;
     }
+    if (signal.aborted) throw new DOMException("Aborted", "AbortError");
+    if (++failures > MAX_RECONNECTS) throw new Error("Connection lost. Reload to see the answer when it finishes.");
+    await sleep(Math.min(500 * 2 ** (failures - 1), 4000));
   }
+}
+
+/** Start (or, with the same requestId, re-attach to) a chat turn. */
+export function streamChat(
+  body: { message: string; conversationId: string; tz: string; mode?: "auto" | "fast" | "deep"; requestId: string },
+  onEvent: (e: AgentEvent) => void,
+  signal: AbortSignal,
+  onRun?: (runId: string) => void,
+): Promise<void> {
+  return follow(
+    (last) =>
+      authFetch("/api/chat", {
+        method: "POST",
+        headers: { "content-type": "application/json", ...(last >= 0 ? { "last-event-id": String(last) } : {}) },
+        body: JSON.stringify(body),
+        signal,
+      }),
+    onEvent,
+    signal,
+    onRun,
+  );
+}
+
+/** Follow a run that is already going (after a page reload or opening a chat whose answer is still being written). */
+export function attachRun(runId: string, onEvent: (e: AgentEvent) => void, signal: AbortSignal, onRun?: (runId: string) => void): Promise<void> {
+  return follow((last) => authFetch(`/api/runs/${runId}/events${last >= 0 ? `?after=${last}` : ""}`, { signal }), onEvent, signal, onRun);
 }

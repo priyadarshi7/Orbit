@@ -13,8 +13,7 @@ serve({ fetch: server.fetch, port: app.cfg.port }, (info) => {
 });
 
 const shutdown = () => {
-  app.close();
-  process.exit(0);
+  void app.close().finally(() => process.exit(0));
 };
 process.on("SIGINT", shutdown);
 process.on("SIGTERM", shutdown);

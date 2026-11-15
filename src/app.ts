@@ -25,7 +25,7 @@ export interface App {
   outbox: OutboxWorker;
   /** The cheap model used for background work (memory writing, follow-up suggestions). */
   background: LanguageModel;
-  close(): void;
+  close(): Promise<void>;
 }
 
 /** Composition root: the only place that wires real adapters to ports. */
@@ -63,8 +63,8 @@ export function createApp(cfg: Config = loadConfig()): App {
     deps,
     outbox,
     background,
-    close: () => {
-      outbox.stop();
+    close: async () => {
+      await outbox.stop();
       store.close();
     },
   };

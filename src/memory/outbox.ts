@@ -17,6 +17,8 @@ export interface OutboxOptions {
  */
 export class OutboxWorker {
   private running = false;
+  private stopped = false;
+  private inflight: Promise<void> | null = null;
   private timer: NodeJS.Timeout | null = null;
   private readonly maxAttempts: number;
   private readonly nowMs: () => number;
@@ -31,17 +33,22 @@ export class OutboxWorker {
   }
 
   start(): void {
+    this.stopped = false;
     const n = this.store.recoverOutbox();
     if (n) this.opts.log?.(`outbox: recovered ${n} interrupted job(s)`);
     void this.drain();
   }
 
-  stop(): void {
+  /** Stops accepting work and waits (briefly) for the job in flight, so the database can be closed safely. */
+  async stop(): Promise<void> {
+    this.stopped = true;
     if (this.timer) clearTimeout(this.timer);
     this.timer = null;
+    if (this.inflight) await Promise.race([this.inflight.catch(() => undefined), new Promise((r) => setTimeout(r, 5000).unref?.())]);
   }
 
   enqueue(kind: string, dedupeKey: string, payload: unknown, createdAt: string): void {
+    if (this.stopped || !this.store.db.open) return;
     this.store.enqueue(kind, dedupeKey, payload, this.nowMs(), createdAt);
     // Run after the current tick so the response is never delayed by it.
     setImmediate(() => void this.drain());
@@ -49,18 +56,21 @@ export class OutboxWorker {
 
   /** Process every due job; resolves when none are left due. */
   async drain(): Promise<void> {
-    if (this.running) return;
+    if (this.running || this.stopped) return;
     this.running = true;
+    let done!: () => void;
+    this.inflight = new Promise<void>((r) => (done = r));
     try {
-      while (true) {
+      while (!this.stopped && this.store.db.open) {
         const job = this.store.claimNextJob(this.nowMs());
         if (!job) break;
         const handler = this.handlers[job.kind];
         try {
           if (!handler) throw new Error(`no handler for job kind "${job.kind}"`);
           await handler(job.payload);
-          this.store.completeJob(job.id);
+          if (this.store.db.open) this.store.completeJob(job.id);
         } catch (e) {
+          if (!this.store.db.open) break;
           const msg = e instanceof Error ? e.message : String(e);
           if (job.attempts >= this.maxAttempts) {
             this.store.failJob(job.id, msg, null);
@@ -79,6 +89,8 @@ export class OutboxWorker {
       }
     } finally {
       this.running = false;
+      this.inflight = null;
+      done();
     }
   }
 

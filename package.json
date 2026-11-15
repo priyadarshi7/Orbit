@@ -1,0 +1,59 @@
+{
+  "name": "orbit-chat-agent",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "A web-search chat agent: model decides, harness guarantees.",
+  "engines": {
+    "node": ">=20.9"
+  },
+  "scripts": {
+    "dev": "concurrently -k -n api,web -c cyan,magenta \"npm:dev:api\" \"npm:dev:web\"",
+    "dev:api": "node --watch --import tsx src/server/index.ts",
+    "dev:web": "vite --config web/vite.config.ts",
+    "preview": "vite preview --config web/vite.config.ts",
+    "build": "tsc --noEmit && npm run build:web",
+    "start": "tsx src/server/index.ts",
+    "start:web": "npm run build:web && npm run preview",
+    "build:web": "vite build --config web/vite.config.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "seed": "tsx src/memory/seed.ts",
+    "eval": "tsx src/eval/run.ts",
+    "bench": "tsx src/eval/bench.ts",
+    "models": "tsx src/models-list.ts"
+  },
+  "dependencies": {
+    "@ai-sdk/google": "^4.0.120",
+    "@ai-sdk/groq": "^4.0.83",
+    "@ai-sdk/openai-compatible": "^3.0.92",
+    "@hono/node-server": "^2.1.8",
+    "@mozilla/readability": "^0.6.0",
+    "ai": "^7.0.172",
+    "better-sqlite3": "^13.1.1",
+    "chrono-node": "^2.10.3",
+    "dotenv": "^18.0.10",
+    "hono": "^4.13.18",
+    "linkedom": "^0.18.15",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.3.5",
+    "@types/better-sqlite3": "^9.6.0",
+    "@types/node": "^26.6.6",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.3.0",
+    "concurrently": "^10.0.7",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "react-markdown": "^10.1.0",
+    "react-router": "^8.5.1",
+    "remark-gfm": "^4.0.1",
+    "tailwindcss": "^4.3.5",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.8",
+    "vitest": "^5.1.0"
+  }
+}

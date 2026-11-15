@@ -173,6 +173,12 @@ export function buildServer(app: ReturnType<typeof createApp>, opts: ServerOptio
     return streamSSE(c, async (stream) => {
       const ac = new AbortController();
       stream.onAbort(() => ac.abort());
+      // Backstop only: the agent has its own soft deadline, so this fires for a turn that is genuinely stuck
+      // (a provider that never answers). It frees the user's slot so they are never locked out by a hung turn.
+      const backstop = setTimeout(() => {
+        ac.abort();
+        release();
+      }, cfg.budgets.turnHardTimeoutMs);
       try {
         for await (const ev of runTurn(turnDeps, { ...body, signal: ac.signal })) {
           await stream.writeSSE({ event: ev.type, data: JSON.stringify(ev) });
@@ -180,6 +186,7 @@ export function buildServer(app: ReturnType<typeof createApp>, opts: ServerOptio
       } catch {
         ac.abort();
       } finally {
+        clearTimeout(backstop);
         release();
       }
     });

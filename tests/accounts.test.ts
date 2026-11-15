@@ -1,3 +1,5 @@
+import { simulateReadableStream } from "ai";
+import { MockLanguageModelV4 } from "ai/test";
 import { describe, expect, it } from "vitest";
 import { StaticSearch } from "../src/adapters/fixtures";
 import type { AgentDeps } from "../src/agent/run";
@@ -302,5 +304,82 @@ describe("slot vocabulary stays consistent without a fixed list", () => {
     expect(prompt).not.toContain("secret hobby");
     // Reusing the slot name replaced the old value instead of adding a second fact.
     expect(root.forUser("u_a").facts()).toEqual(["Born 1 May 2005"]);
+  });
+});
+
+describe("limits never cut off an answer that is already streaming", () => {
+  const usage = {
+    inputTokens: { total: 10, noCache: 10, cacheRead: undefined, cacheWrite: undefined },
+    outputTokens: { total: 10, text: 10, reasoning: undefined },
+  };
+  const words = Array.from({ length: 12 }, (_, i) => `word${i} `);
+  const slowAnswer = () =>
+    new MockLanguageModelV4({
+      doStream: async () => ({
+        stream: simulateReadableStream({
+          chunkDelayInMs: 25,
+          chunks: [
+            { type: "text-start", id: "t" },
+            ...words.map((w) => ({ type: "text-delta" as const, id: "t", delta: w })),
+            { type: "text-end", id: "t" },
+            { type: "finish", finishReason: { unified: "stop", raw: undefined }, logprobs: undefined, usage },
+          ],
+        }),
+      }),
+    });
+
+  function server(env: Record<string, string>, model: MockLanguageModelV4) {
+    const cfg = loadConfig({ DB_PATH: ":memory:", TURN_SOFT_DEADLINE_MS: "30000", ...env } as NodeJS.ProcessEnv);
+    const deps: AgentDeps = {
+      cfg,
+      store: new MemoryStore(":memory:"),
+      outbox: null,
+      clock: fixedClock(NOW),
+      search: new StaticSearch({}),
+      reader: new MapReader({}),
+      answer: { name: "slow", model },
+    };
+    return buildServer({ cfg, deps, outbox: null as never, background: model, close: async () => undefined });
+  }
+  const headers = (t: string) => ({ authorization: `Bearer ${t}`, "content-type": "application/json" });
+  const post = (app: ReturnType<typeof server>, t: string, message: string) =>
+    app.request("/api/chat", { method: "POST", headers: headers(t), body: JSON.stringify({ message, mode: "fast", tz: "UTC" }) });
+
+  it("finishes a slow answer even while the user's allowance is exhausted and refused", async () => {
+    const app = server({ RATE_LIMIT_CHAT_PER_MIN: "2", MAX_CONCURRENT_TURNS: "1" }, slowAnswer());
+    const { token } = (await (await app.request("/api/session", { method: "POST" })).json()) as { token: string };
+
+    const first = await post(app, token, "first, slow");
+    expect(first.status).toBe(200);
+    // While that answer is still streaming, hammer the limits: both the allowance and the concurrency cap refuse.
+    const refused = await Promise.all([post(app, token, "again"), post(app, token, "and again"), post(app, token, "and again")]);
+    expect(refused.every((r) => r.status === 429)).toBe(true);
+
+    const sse = await first.text(); // the original answer must still arrive whole
+    expect(sse).toContain("event: done");
+    expect(sse).not.toContain("event: error");
+    const final = JSON.parse(sse.match(/event: final\ndata: (.*)/)![1]!) as { text: string };
+    expect(final.text).toBe(words.join("").trim());
+  });
+
+  it("frees a stuck turn's slot after the hard timeout instead of locking the user out", async () => {
+    let call = 0;
+    const hung = new MockLanguageModelV4({
+      doStream: async () => {
+        if (call++ === 0) return new Promise(() => undefined); // a provider that never answers
+        return slowAnswer().doStream({} as never);
+      },
+    });
+    const app = server({ MAX_CONCURRENT_TURNS: "1", TURN_HARD_TIMEOUT_MS: "150", RATE_LIMIT_CHAT_PER_MIN: "50" }, hung);
+    const { token } = (await (await app.request("/api/session", { method: "POST" })).json()) as { token: string };
+
+    const stuck = await post(app, token, "this will hang");
+    expect(stuck.status).toBe(200);
+    expect((await post(app, token, "blocked while the first is running")).status).toBe(429);
+    await new Promise((r) => setTimeout(r, 300)); // past the backstop
+    const next = await post(app, token, "now it works");
+    expect(next.status).toBe(200);
+    void stuck.body?.cancel().catch(() => undefined);
+    void next.body?.cancel().catch(() => undefined);
   });
 });

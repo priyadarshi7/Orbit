@@ -63,6 +63,8 @@ export interface Config {
     historyTokenBudget: number;
     maxOutputTokens: number;
     turnSoftDeadlineMs: number;
+    /** Server-side backstop: a turn still running after this is aborted and its concurrency slot freed. */
+    turnHardTimeoutMs: number;
   };
 }
 
@@ -121,6 +123,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       historyTokenBudget: int(env.HISTORY_TOKEN_BUDGET, 1800),
       maxOutputTokens: int(env.MAX_OUTPUT_TOKENS, 1500),
       turnSoftDeadlineMs: int(env.TURN_SOFT_DEADLINE_MS, 40_000),
+      turnHardTimeoutMs: int(env.TURN_HARD_TIMEOUT_MS, 180_000),
     },
   };
 }

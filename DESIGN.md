@@ -1,62 +1,66 @@
 # DESIGN: Orbit, a web-search chat agent
 
-**Thesis:** the model decides, the harness guarantees. The model owns the judgment calls (whether to search, what to search, when it knows enough). Deterministic code owns everything that must be exact: dates, memory lookup, citation checking, budgets, retries. Nothing sits in front of the first token that doesn't have to.
+**Thesis:** the model decides, the harness guarantees. Models own the judgment calls: whether to search, what to search, when they know enough. Deterministic code owns what must be exact: dates, memory, citation checks, budgets, retries, fallbacks. Every role is a model prompt over **one tool**, `web_search`.
 
 ## How it works
 
-![Orbit architecture: request lifecycle](docs/architecture.svg)
+```
+Browser (Vite/React, :5173) ──SSE──> API (Hono, :8000)
+                                        │
+   1 Context (code): date/tz, token-budgeted history, memory block
+   2 Router (cheap LLM, rules as fallback; user can force Fast/Deep)
+        ├─ FAST  one agent loop: model ⇄ web_search (≤4 rounds) → answer
+        └─ DEEP  Planner → N parallel Researchers → Synthesizer → Verifier
+   3 Grounding gate (code): citations resolve, tags stripped, prompt-leak and stale-answer guards
+   4 Memory writer (async outbox): episode, profile facts, dated claims with supersede chain
+        web_search = parallel fan-out · RRF · page read · BM25 passages · cache · Tavily⇄Exa failover
+```
 
-**1. Context assembly (no LLM).** Builds the turn: current date and timezone, recent conversation, and a memory block. The block holds the profile, a one-line timeline of recent chats, and any records matching a date the user mentioned ("last Tuesday", "3 November", resolved with chrono-node in their timezone) or, when the user is clearly referring back, an FTS5 keyword match. Exact dates are SQL keys, so there is no embedding fuzz. If a referenced date has no record, the block says `NO RECORD` with the nearest stored dates, and the prompt forbids inventing a past chat.
+**Fast path** (most questions): one model, a bounded search loop, streamed answer. Budgets are code, not prompt: repeated queries are refused, the last step forbids tools, a soft deadline forces an answer, and a tool-free recovery call turns gathered evidence into an answer if a model misbehaves.
 
-**2. Agent loop.** One model, one tool, no intent classifier or planner (a router is wrong on exactly the questions nobody anticipated, and costs a round trip before the first token). A greeting costs one call; a multi-hop question runs up to `MAX_SEARCH_ROUNDS` rounds. The caps are enforced in code: the tool refuses repeated queries and rounds beyond the cap, the final step has tool calls forbidden, a soft deadline forces an answer, and if a model ignores that, one tool-free recovery call still turns the gathered evidence into an answer. If a model cites sources it never retrieved, the turn is re-run once with search required.
+**Deep path** (comparisons, multi-part or research questions): a planner splits the question into up to 4 sub-questions, shown live in the UI; researchers run in parallel (3 at a time, 2 rounds each) on a cheap model; the answer model writes one cited report; a verifier checks each cited claim against the passages the writer saw and rewrites the answer once without unsupported claims. Any failure before synthesis degrades to the fast path, so deep can cost time but never the answer.
 
-**T. `web_search` is a retrieval pipeline, not a snippet fetch.** The model sees one tool: `queries[]`, `depth: snippets | read`, `recency`. Inside:
-- parallel fan-out across queries, cached with a TTL by how fast the topic goes stale
-- dedupe by normalised URL and near-duplicate title; reciprocal-rank fusion, so a page several differently-worded queries surface ranks higher
-- for `read`, fetch the top pages (max two per domain), extract the article text and publish date
-- chunk into passages, rank with BM25, pack under a token budget; every source gets a stable id
+**Router:** a cheap model classifies each question with the previous exchange (about 1 s). On timeout or bad output keyword rules decide. Forced modes skip it.
 
-Failures degrade to partial results, never an exception. Page text is wrapped as untrusted data and cannot pose as our delimiters.
+**Retrieval:** parallel queries, TTL cache, reciprocal-rank fusion, optional page reads (SSRF-guarded, every redirect re-checked), BM25 over stemmed passages under a token budget, stable source ids. Page text is untrusted data.
 
-**3. Grounding gate (code).** The model cites `[n]` against evidence ids. The gate drops any citation that doesn't resolve to a source actually retrieved, strips echoed internal tags, and lints undated relative-time language. Relative-to-absolute dates, naming conflicting sources and stating gaps are prompt rules, checked by the eval.
-
-**4. Memory writer (async, off the hot path).** After the answer streams, a job in a durable **outbox** (idempotent per turn, retried with backoff, recovered after a crash) has a small model write a summary and keywords, extract durable profile facts, and record **claims**: atomic, dated, sourced facts, each linked to the one it supersedes. "Has that changed since…?" becomes a diff against stored claims. If extraction keeps failing, a minimal episode is stored so the turn stays findable by date.
+**Memory:** SQLite (FTS5). Dates are SQL keys ("last Tuesday" resolved in the user's timezone), so no embedding fuzz. A profile fact is stored only if its numbers and names appear in what the *user* wrote (a real bug: a chat date was once saved as a birthday). "Has it changed?" is a diff against dated claims.
 
 ## Why this shape
 
-- **Latency.** First token waits on one model call plus, at most, one search round. Stage 1 is code. Memory writes run after the response. Queries fan out in a single tool call. The UI streams status so waiting is never silent.
-- **Cost.** The system prompt and tool schema are byte-stable (a test asserts it), and the date and memory ride in the user turn, so a timestamp never invalidates provider prefix caching. Search and page caches, an evidence token budget, and a small model for background work. The trace records cached tokens per turn to catch a silent cache miss.
-- **Correctness.** Most of the quality comes from retrieval (read pages, rank passages), then grounding. The model reasons over evidence it can cite.
-- **Model-agnostic.** The LLM is the Vercel AI SDK's `LanguageModel`, bound by role (`answer`, `background`, `judge`) from config. Groq, Google AI Studio and local OpenAI-compatible servers work today; switching is an env change. The answer model is chosen by benchmark, not taste.
-- **One tool, honestly.** Memory is context the harness injects, not a second tool: it saves a round trip and respects the brief. The cost is that the model can't pull a past chat the harness missed. If the eval shows misses, a `recall` tool is the fix.
+- **Speed:** first token waits on one model call plus at most one search round on the fast path. Memory writes run after the response. Prompt prefix is byte-stable for provider caching.
+- **Correctness:** most of it comes from retrieval, then grounding; the verifier checks that a citation *supports* the claim, not just that it exists.
+- **Scale:** every external dependency (search, models, page reader, store) sits behind a port, so Postgres, Redis or a hosted provider are adapter swaps. Per-provider budgets and bounded fan-out stop our own parallelism from tripping rate limits.
+- **Honest limits:** memory and chats are global (no auth or per-user scoping), and there is no rate limiting yet.
 
-## Proof, not claims
+## Measured so far (`npm run eval`, LLM judge, live search)
 
-`npm test`: 48 unit tests, including the whole agent loop on a scripted model (search, citation validation, fallback, round cap, recovery, memory injection, prompt-prefix stability).
-`npm run eval`: 26 cases across ten skills (no-search, fresh facts, multi-hop, comparison, ambiguous, context-dependent follow-up, dated recall, change detection, no-record, prompt-injection) so a change that helps one skill and hurts another shows up immediately. Each case records string and behaviour checks (searched or not, citations, regexes), time to first token, total latency, tokens and cached tokens, with an optional LLM judge. `--mode record` freezes search results; `npm run bench -- --models a,b --mode replay` then compares models on identical evidence.
+| Run | Result |
+|---|---|
+| First live run, 26 cases / 10 skills | 20 / 26 |
+| After fixing the causes (citation formats, stale answers, injection, date handling) | 26 / 26 (one judge error on a date was overruled by hand) |
+| Re-run of 19 cases, judge average | 4.32 / 5 |
+| Unit and integration tests (scripted models, no keys) | 175 passing, run in CI |
 
-Results: _not yet run. To be filled in from `npm run bench` once the models are benchmarked._
+Latency is poor on Groq's free tier (median about 19 s, p90 about 89 s, mostly rate-limit waits). **Not yet measured:** the 13 newer eval cases, the deep path, router accuracy, verifier false-positive rate (one early run flagged every source), and the model comparison that chooses the default. Reported here rather than claimed. Results are browsable at `/benchmark`.
 
 ## Considered and rejected
 
 | Option | Why not |
 |---|---|
-| Intent router / planner LLM before the loop | Round trip before first token; brittle on novel questions |
-| Vector DB as primary memory | Dates are exact keys; extra infra for worse recall here. FTS5 over model-written summaries covers paraphrase |
+| LangChain / LangGraph | A five-step pipeline in a few hundred readable lines; a graph framework adds moving parts, not capability |
+| Always-deep multi-agent | Slower and costlier on easy questions; deep is opt-in via the router |
+| Keyword-only router | Missed paraphrase and other languages; kept only as the fallback |
+| Vector DB as primary memory | Dates are exact keys; FTS5 over summaries covers paraphrase |
 | Memory as a second tool | Breaks the one-tool rule and adds a round trip |
-| Provider-hosted web search | One fewer key, but no control over fan-out, page reading, caching or ranking |
-| LangChain / multi-agent | Moving parts with nothing in this task to justify them. The loop is one readable file |
-| Small-model page summarising before the answer | Saves tokens but can drop the one relevant sentence, and adds a hop. Ranking trims pages for free |
-| Transcript-only memory | Prose can't be diffed, so "what changed" becomes guesswork |
-
-## Stack
-
-TypeScript on Node; Hono + SSE; React + Vite; `better-sqlite3` (WAL, FTS5); Vercel AI SDK; Tavily behind a `SearchProvider` port. The agent core (`src/agent`, `src/retrieval`, `src/memory`, `src/grounding`) depends only on ports. Keys: see `.env.example`. Decision log: `docs/DECISIONS.md`.
+| Provider-hosted web search | No control over fan-out, page reading, caching, ranking |
+| Local model as default | Needs Ollama and a GPU for a reviewer to run; supported as an option |
 
 ## With another week
 
-1. Speculative search: start the likely first query while the model is still reasoning; keep it only if the eval shows a win.
-2. A cross-encoder reranker for passages instead of lexical ranking, and a second search provider with hedged requests.
-3. Embeddings as a second memory index for long-lived users, and a `recall` tool if the eval shows retrieval misses.
-4. Per-model provider options (thinking budget, tool-call quirks) in the model config, found by the benchmark.
-5. A larger, adversarial eval set with per-category regression gates in CI.
+1. Run and publish the numbers above: deep-path cases, a labelled routing set, verifier precision, then choose the default answer model by benchmark.
+2. Auth and per-user memory; Postgres and Redis behind the existing interfaces; request rate limits and a token-bucket model gateway.
+3. Verifier on the fast path; supersede logic for changed profile facts; a cross-encoder reranker.
+4. OpenTelemetry traces from the stage timings already recorded; an eval regression gate in CI.
+
+Stack: TypeScript on Node, Hono + SSE, React + Vite + Tailwind, `better-sqlite3`, Vercel AI SDK, Tavily and Exa. Keys: `.env.example`. Decisions: `docs/DECISIONS.md`.

@@ -1,9 +1,6 @@
 import "dotenv/config";
 
-/** "provider:model-id", e.g. "groq:openai/gpt-oss-120b". */
 import { parsePrices, type PriceTable } from "./pricing";
-
-export type ModelSpec = `${"groq" | "google" | "local"}:${string}`;
 
 export interface Config {
   port: number;

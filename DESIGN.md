@@ -16,7 +16,7 @@
 
 ## Why this shape
 
-- **Speed:** first token waits on one model call plus at most one search round. Memory writes happen after the response. The default answer model is Gemini 3.1 Flash-Lite (benchmarked live: 7/7 cases at a 15-25 s median against Groq `gpt-oss-120b` at about 78 s on the free tier); Groq is the automatic fallback if the primary fails before producing text.
+- **Speed:** first token waits on one model call plus at most one search round. Memory writes happen after the response. The default answer model is Gemini 3.1 Flash-Lite (benchmarked live: 7/7 cases at a 15-25 s median against Groq `gpt-oss-120b` at about 78 s on the free tier); Gemini 2.5 Flash (a separate quota) is the automatic fallback, taken after one retry, if the primary fails before producing text; the router and memory writer also run on 2.5 Flash so they do not share the answer model's rate limit.
 - **Correctness:** mostly retrieval, then grounding; the verifier checks that a citation *supports* the claim, not just that it exists.
 - **Scale:** search, models, page reader, store, limiter and sessions sit behind interfaces, so Postgres, Redis or a real identity provider are adapter swaps.
 - **Honest limits:** sessions are anonymous; limiter, event log and the startup sweep are single-node; a model call cut off mid-stream is repeated, not continued; resume is a click, so no quota is spent unattended.

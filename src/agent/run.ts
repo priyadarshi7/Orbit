@@ -229,6 +229,9 @@ async function execute(
   }
 
   if (!deepDone) {
+    // With a fallback standing by, a struggling primary gets one retry, not four: waiting out a
+    // rate limit or an overloaded model for minutes is worse than answering from the fallback.
+    const retriesFor = (m: NamedModel) => (deps.fallback && m === deps.answer ? 1 : 4);
     const run = async (m: NamedModel, forceSearch = false) => {
       state.answer = "";
       state.streamed = false;
@@ -246,7 +249,7 @@ async function execute(
         scale,
         onEvidence,
       });
-      return streamOnce(m, messages, search, cfg, req.signal, rel, emit, trace, state, forceSearch);
+      return streamOnce(m, messages, search, cfg, req.signal, rel, emit, trace, state, forceSearch, retriesFor(m));
     };
 
     outcome = await run(current);
@@ -291,7 +294,7 @@ async function execute(
     if (outcome.error && !state.answer && state.lastMessages && registry.size > 0 && !req.signal?.aborted) {
       trace.warnings.push(`answer step failed (${errMsg(outcome.error)}); recovered with a tool-free call`);
       const m = trace.usedFallbackModel && deps.fallback ? deps.fallback : deps.answer;
-      outcome = await answerOnly(m, state.lastMessages, cfg, req.signal, emit, state);
+      outcome = await answerOnly(m, state.lastMessages, cfg, req.signal, emit, state, retriesFor(m));
     }
   }
 
@@ -370,6 +373,7 @@ async function answerOnly(
   signal: AbortSignal | undefined,
   emit: (e: AgentEventInput) => void,
   state: StreamState,
+  maxRetries = 4,
 ): Promise<StreamOutcome> {
   const result = streamText({
     model: m.model,
@@ -379,7 +383,7 @@ async function answerOnly(
     maxOutputTokens: cfg.budgets.maxOutputTokens,
     ...(providerOptionsFor(m.name, cfg.answerReasoning) ? { providerOptions: providerOptionsFor(m.name, cfg.answerReasoning) } : {}),
     // Providers say how long to wait when rate-limited (e.g. "try again in 4s"); wait it out.
-    maxRetries: 4,
+    maxRetries,
     abortSignal: signal,
     onError: () => undefined,
   });
@@ -409,6 +413,7 @@ async function streamOnce(
   trace: TurnTrace,
   state: StreamState,
   forceSearch = false,
+  maxRetries = 4,
 ): Promise<StreamOutcome> {
   const maxRounds = cfg.budgets.maxSearchRounds;
   const result = streamText({
@@ -422,7 +427,7 @@ async function streamOnce(
     maxOutputTokens: cfg.budgets.maxOutputTokens,
     ...(providerOptionsFor(m.name, cfg.answerReasoning) ? { providerOptions: providerOptionsFor(m.name, cfg.answerReasoning) } : {}),
     // Providers say how long to wait when rate-limited (e.g. "try again in 4s"); wait it out.
-    maxRetries: 4,
+    maxRetries,
     abortSignal: signal,
     onError: () => undefined, // surfaced through fullStream below
     prepareStep: ({ stepNumber, messages: msgs }) => {
